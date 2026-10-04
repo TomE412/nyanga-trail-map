@@ -1,18 +1,42 @@
-// Nyanga Trail Map: offline topo map with GPS position and race course.
-// Keep APP_VERSION in step with CACHE in sw.js.
-const APP_VERSION = 'v2 (4 Oct 2026)';
-const TILE_CACHE = 'tiles-v1';
+// Nyanga Trail Map: offline race map with live GPS, run recording and course.
+// Keep APP_VERSION in step with SHELL in sw.js.
+const APP_VERSION = 'v3 (4 Oct 2026)';
+const TILE_CACHE = 'tiles-v2';
 // Bump when a tile set is added or redrawn, so phones know to download again.
-const TILES_TAG = 'contours1+turaco1';
+const TILES_TAG = 'contours2+turaco3';
 const TILE_SETS = ['tiles', 'tiles-turaco'];
 const BBOX = { west: 32.62, east: 32.98, south: -18.42, north: -18.08 };
-// Far and Wide "Turaco Trail" race map (from its GeoTIFF).
+// Far and Wide "Turaco Trail" race map, bounds read from its GeoTIFF.
 const RACE_BBOX = { west: 32.770237886116384, east: 32.99270592722873, south: -18.476174967869852, north: -18.264234107572427 };
+const RACE_SOURCE_SHA256 = '85700aa5fa750407385c07cce589dcc9b6c0361ad4c2e24a623d1c28b21e0c91';
+
+// Thresholds for GPS warnings and recording. Change here, not in the code below.
+const CONFIG = {
+  currentMaxAgeSec: 10,     // reading 0-10 s old: current
+  delayedMaxAgeSec: 30,     // 11-30 s: delayed; older: stale
+  poorAccuracyM: 50,        // ± worse than this is flagged as poor
+  headingMinSpeedMs: 0.7,   // GPS heading is only trusted when moving
+  nearMapKm: 5,             // "centre on me" works up to this far outside the map
+  recordMinMoveM: 5,        // skip points closer than this...
+  recordMaxGapSec: 30,      // ...unless this long has passed
+  recordMaxAccuracyM: 75,   // readings worse than this are not recorded
+  recordMaxSpeedMs: 12,     // faster jumps (43 km/h) are treated as GPS glitches
+};
 
 const $ = id => document.getElementById(id);
+const escapeHtml = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const pref = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch {} return null; };
 $('version').textContent = 'Version ' + APP_VERSION;
 
-// ---------- Map ----------
+let toastTimer;
+function toast(msg, ms = 4000) {
+  const t = $('toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.style.display = 'none'), ms);
+}
+
+// =====================================================================
+// Map
+// =====================================================================
 const contourBounds = L.latLngBounds([BBOX.south, BBOX.west], [BBOX.north, BBOX.east]);
 const raceBounds = L.latLngBounds([RACE_BBOX.south, RACE_BBOX.west], [RACE_BBOX.north, RACE_BBOX.east]);
 const bounds = L.latLngBounds(contourBounds.getSouthWest(), contourBounds.getNorthEast()).extend(raceBounds);
@@ -22,12 +46,10 @@ const map = L.map('map', {
 });
 map.fitBounds(raceBounds);
 try {
-  const v = JSON.parse(localStorage.getItem('view'));
+  const v = JSON.parse(pref('view'));
   if (v) map.setView(v.c, v.z);
 } catch {}
-map.on('moveend', () => {
-  try { localStorage.setItem('view', JSON.stringify({ c: map.getCenter(), z: map.getZoom() })); } catch {}
-});
+map.on('moveend', () => pref('view', JSON.stringify({ c: map.getCenter(), z: map.getZoom() })));
 
 L.tileLayer('tiles/{z}/{x}/{y}.webp', {
   minZoom: 11, maxZoom: 18, maxNativeZoom: 16, bounds: contourBounds,
@@ -38,13 +60,16 @@ const raceLayer = L.tileLayer('tiles-turaco/{z}/{x}/{y}.webp', {
   attribution: 'Race map © Far and Wide',
 });
 L.control.scale({ imperial: false, position: 'topleft' }).addTo(map);
-// The GPS dot sits in its own layer above every label so it is never hidden.
+// The position marker sits in its own layer above every label so it is never hidden.
 map.createPane('gps').style.zIndex = 650;
 
 function setZoomClass() { map.getContainer().classList.toggle('zoom-lo', map.getZoom() < 13); }
 map.on('zoomend', setZoomClass); setZoomClass();
 
-// Paths, roads, streams and named places from OpenStreetMap.
+const label = (text, cls) => L.divIcon({ className: '', html: `<div class="lbl ${cls}">${text}</div>`, iconSize: [0, 0] });
+
+// Paths, roads, streams and names from OpenStreetMap. The race map already
+// shows these, so they only appear when the race map is switched off.
 const STYLE = {
   river: { color: '#3d85c6', weight: 2.2 },
   stream: { color: '#6aaee8', weight: 1.2 },
@@ -52,18 +77,14 @@ const STYLE = {
   track: { color: '#6d4c41', weight: 1.8, dashArray: '6 4' },
   path: { color: '#c62828', weight: 1.8, dashArray: '3 4' },
 };
-const label = (text, cls) => L.divIcon({ className: '', html: `<div class="lbl ${cls}">${text}</div>`, iconSize: [0, 0] });
-const escapeHtml = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-
-// The race map already shows paths and names, so these only appear when it is off.
 const osmLayer = L.layerGroup();
+let raceOn = pref('raceMap') !== '0';
 function setRaceMap(on) {
+  raceOn = on;
   if (on) { raceLayer.addTo(map); osmLayer.remove(); } else { raceLayer.remove(); osmLayer.addTo(map); }
   $('raceToggle').checked = on;
-  try { localStorage.setItem('raceMap', on ? '1' : '0'); } catch {}
+  pref('raceMap', on ? '1' : '0');
 }
-let raceOn = true;
-try { raceOn = localStorage.getItem('raceMap') !== '0'; } catch {}
 setRaceMap(raceOn);
 $('raceToggle').onchange = e => setRaceMap(e.target.checked);
 
@@ -84,29 +105,543 @@ fetch('data/osm.geojson').then(r => r.json()).then(gj => {
   }
 }).catch(err => console.warn('Could not load paths', err));
 
-// ---------- Offline download ----------
+// Map buttons
+$('zoomInBtn').onclick = () => map.zoomIn();
+$('zoomOutBtn').onclick = () => map.zoomOut();
+$('fitBtn').onclick = () => { setFollow(false); map.fitBounds(raceOn ? raceBounds : bounds); };
+
+// =====================================================================
+// GPS
+// =====================================================================
+const gps = { watchId: null, perm: 'unknown', state: 'off', fix: null, errorCode: null, follow: false, detailsOpen: false };
+
+if (navigator.permissions && navigator.permissions.query) {
+  navigator.permissions.query({ name: 'geolocation' }).then(p => {
+    gps.perm = p.state;
+    p.onchange = () => { gps.perm = p.state; renderGps(); };
+    renderGps();
+  }).catch(() => {});
+}
+
+const gpsRenderer = L.svg({ pane: 'gps' });
+const accCircle = L.circle([0, 0], { pane: 'gps', renderer: gpsRenderer, radius: 1, color: '#1565c0', weight: 1.5, fillOpacity: 0.12, interactive: false });
+const meMarker = L.marker([0, 0], {
+  pane: 'gps', interactive: false, keyboard: false,
+  icon: L.divIcon({ className: '', iconSize: [0, 0], html: '<div class="me"><div class="me-arrow"></div><div class="me-dot"></div><div class="me-tag"></div></div>' }),
+});
+
+function startGps() {
+  if (!('geolocation' in navigator)) { gps.state = 'unsupported'; renderGps(); return; }
+  if (gps.watchId !== null) return;
+  gps.state = 'searching'; gps.errorCode = null;
+  gps.watchId = navigator.geolocation.watchPosition(onFix, onGpsError,
+    { enableHighAccuracy: true, maximumAge: 2000, timeout: 60000 });
+  pref('gpsOn', '1');
+  renderGps();
+}
+
+function stopGps() {
+  if (gps.watchId !== null) navigator.geolocation.clearWatch(gps.watchId);
+  gps.watchId = null;
+}
+
+function onFix(pos) {
+  const c = pos.coords;
+  const num = v => (v == null || Number.isNaN(v) ? null : v);
+  const r = {
+    lat: c.latitude, lon: c.longitude, acc: num(c.accuracy), alt: num(c.altitude), altAcc: num(c.altitudeAccuracy),
+    heading: num(c.heading), speed: num(c.speed), t: pos.timestamp || Date.now(),
+  };
+  if (!Number.isFinite(r.lat) || !Number.isFinite(r.lon) || Math.abs(r.lat) > 90 || Math.abs(r.lon) > 180) return;
+  const first = !gps.fix;
+  gps.fix = r; gps.state = 'ok'; gps.errorCode = null;
+
+  // The marker is always placed exactly where the GPS says, never snapped to
+  // the course or pulled onto the map.
+  accCircle.setLatLng([r.lat, r.lon]).setRadius(r.acc || 0);
+  meMarker.setLatLng([r.lat, r.lon]);
+  if (!map.hasLayer(accCircle)) { accCircle.addTo(map); meMarker.addTo(map); }
+
+  if (distanceOutsideKm(r.lat, r.lon) <= CONFIG.nearMapKm && (gps.follow || first)) {
+    if (first) setFollow(true);
+    map.setView([r.lat, r.lon], Math.max(map.getZoom(), 15), { animate: !first });
+  }
+  updateCourse();
+  recorder.add(r);
+  renderGps();
+}
+
+function onGpsError(err) {
+  gps.errorCode = err.code;
+  if (err.code === 1) { gps.state = 'denied'; gps.perm = 'denied'; stopGps(); }
+  else if (err.code === 2) gps.state = gps.fix ? 'ok' : 'unavailable';
+  else gps.state = gps.fix ? 'ok' : 'searching';
+  renderGps();
+}
+
+// How far outside the whole map a point is, in km (0 when inside).
+function distanceOutsideKm(lat, lon) {
+  if (bounds.contains([lat, lon])) return 0;
+  const cl = Math.min(Math.max(lat, bounds.getSouth()), bounds.getNorth());
+  const cn = Math.min(Math.max(lon, bounds.getWest()), bounds.getEast());
+  return map.distance([lat, lon], [cl, cn]) / 1000;
+}
+
+function freshness(fix) {
+  const age = Math.max(0, (Date.now() - fix.t) / 1000);
+  const level = age <= CONFIG.currentMaxAgeSec ? 'current' : age <= CONFIG.delayedMaxAgeSec ? 'delayed' : 'stale';
+  return { age, level };
+}
+
+// Heading only when it can be trusted: GPS course while moving, otherwise
+// the compass if the runner switched it on.
+const compass = { on: false, deg: null, at: 0 };
+function currentHeading() {
+  const f = gps.fix;
+  if (f && f.heading != null && f.speed != null && f.speed >= CONFIG.headingMinSpeedMs) return { deg: f.heading, src: 'GPS' };
+  if (compass.on && compass.deg != null && Date.now() - compass.at < 3000) return { deg: compass.deg, src: 'compass' };
+  return null;
+}
+
+const compassPoint = b => ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(b / 45) % 8];
+const fmtAge = s => (s < 90 ? `${Math.round(s)} s` : `${Math.round(s / 60)} min`);
+
+function setFollow(on) {
+  gps.follow = on;
+  $('locateBtn').classList.toggle('active', on);
+}
+
+$('locateBtn').onclick = () => {
+  startGps();
+  const f = gps.fix;
+  if (f) {
+    const away = distanceOutsideKm(f.lat, f.lon);
+    if (away > CONFIG.nearMapKm) { toast(`You are ${away.toFixed(0)} km from the map area, so the map cannot show your position.`); return; }
+    setFollow(true);
+    map.setView([f.lat, f.lon], Math.max(map.getZoom(), 15));
+  } else {
+    setFollow(true);
+    toast('Finding your position…', 2500);
+  }
+};
+map.on('dragstart', () => setFollow(false));
+
+function badge(cls, text) { return `<span class="badge ${cls}">${escapeHtml(text)}</span>`; }
+
+function renderGps() {
+  const f = gps.fix, badges = [];
+  let hint = '';
+  if (gps.state === 'off') { badges.push(badge('off', 'GPS off')); hint = 'Tap the blue target button to show your position.'; }
+  else if (gps.state === 'unsupported') { badges.push(badge('bad', '✕ No GPS on this device')); }
+  else if (gps.state === 'denied') {
+    badges.push(badge('bad', '✕ Location blocked'));
+    hint = 'Allow location for this site. iPhone: Settings › Privacy & Security › Location Services › Safari Websites › While Using. Android: tap the lock by the web address › Permissions › Location › Allow. Then tap the target button again.';
+  } else if (!f && gps.state === 'unavailable') {
+    badges.push(badge('bad', '✕ No GPS signal'));
+    hint = 'Check that Location (GPS) is switched on in your phone settings, and move into the open.';
+  } else if (!f) {
+    badges.push(badge('warn', '… Searching for GPS'));
+    hint = 'This can take up to a minute. Stand in the open, away from cliffs.';
+  } else {
+    const { age, level } = freshness(f);
+    if (level === 'current') badges.push(badge('ok', `✓ GPS live ±${Math.round(f.acc)} m`));
+    else if (level === 'delayed') badges.push(badge('warn', `◷ Delayed: ${fmtAge(age)} old`));
+    else badges.push(badge('bad', `✕ OLD POSITION: ${fmtAge(age)}`));
+    const poor = f.acc != null && f.acc > CONFIG.poorAccuracyM;
+    if (poor) badges.push(badge('warn', `⚠ Poor accuracy ±${Math.round(f.acc)} m`));
+    const away = distanceOutsideKm(f.lat, f.lon);
+    if (away > 0) badges.push(badge('bad', `⚠ Outside map: ${away < 10 ? away.toFixed(1) : Math.round(away)} km`));
+    if (level === 'stale') hint = `No new GPS reading for ${fmtAge(age)}. You may have moved since; the grey dot shows where you were.`;
+    else if (poor) hint = 'GPS accuracy is poor. You could be anywhere inside the shaded circle.';
+    else if (away > 0) hint = 'You are outside the map area. Your position is shown where it really is, off the map.';
+  }
+  $('gpsBadges').innerHTML = badges.join('');
+  $('gpsHint').textContent = hint; $('gpsHint').hidden = !hint;
+
+  $('gpsStats').hidden = $('gpsCoords').hidden = !f;
+  if (f) {
+    $('stAlt').textContent = f.alt != null ? `${Math.round(f.alt)} m` : 'n/a';
+    $('stSpeed').textContent = f.speed != null ? `${(f.speed * 3.6).toFixed(1)} km/h` : 'n/a';
+    const h = currentHeading();
+    $('stHeading').textContent = h ? `${Math.round(h.deg)}° ${compassPoint(h.deg)}` : 'n/a';
+    $('gpsCoords').textContent = `${f.lat.toFixed(6)}, ${f.lon.toFixed(6)}  ±${Math.round(f.acc)} m`;
+  }
+  renderDetails();
+  updateMarker();
+  $('locateBtn').classList.toggle('attn', !!f && !gps.follow && distanceOutsideKm(f.lat, f.lon) <= CONFIG.nearMapKm);
+}
+
+function renderDetails() {
+  const d = $('gpsDetails');
+  d.hidden = !gps.detailsOpen;
+  $('detailsBtn').textContent = gps.detailsOpen ? 'Details ▴' : 'Details ▾';
+  if (!gps.detailsOpen) return;
+  const f = gps.fix, h = currentHeading();
+  const permText = { granted: 'Allowed', denied: 'Blocked', prompt: 'Not yet asked', unknown: 'Unknown' }[gps.perm] || gps.perm;
+  const rows = [
+    ['Permission', permText],
+    ['GPS', { off: 'Off', searching: 'Searching', ok: 'Receiving', unavailable: 'Unavailable', denied: 'Blocked', unsupported: 'Not supported' }[gps.state]],
+    ['Map following', gps.follow ? 'On' : 'Off (tap target to re-centre)'],
+    ['Recording', recorder.status === 'idle' ? 'Not recording' : recorder.status],
+  ];
+  if (f) {
+    rows.push(['Reading time', new Date(f.t).toLocaleTimeString()], ['Reading age', fmtAge(freshness(f).age)],
+      ['Latitude', f.lat.toFixed(6)], ['Longitude', f.lon.toFixed(6)], ['Accuracy', `±${Math.round(f.acc)} m`],
+      ['Altitude', f.alt != null ? `${Math.round(f.alt)} m${f.altAcc != null ? ` (±${Math.round(f.altAcc)} m)` : ''}` : 'Not available'],
+      ['Heading', h ? `${Math.round(h.deg)}° from ${h.src}` : 'Not available (shown only when moving, or with compass on)'],
+      ['Speed', f.speed != null ? `${(f.speed * 3.6).toFixed(1)} km/h` : 'Not available'],
+      ['On race map', raceBounds.contains([f.lat, f.lon]) ? 'Yes' : 'No']);
+  }
+  d.innerHTML = rows.map(([k, v]) => `<div class="row"><span>${escapeHtml(k)}</span><b>${escapeHtml(v)}</b></div>`).join('');
+}
+$('detailsBtn').onclick = () => { gps.detailsOpen = !gps.detailsOpen; renderDetails(); };
+
+function updateMarker() {
+  const el = meMarker.getElement();
+  const f = gps.fix;
+  if (!el || !f) return;
+  const me = el.firstChild, { age, level } = freshness(f);
+  const poor = f.acc != null && f.acc > CONFIG.poorAccuracyM;
+  const h = currentHeading();
+  me.className = 'me ' + level + (poor ? ' poor' : '') + (h ? ' has-heading' : '');
+  me.querySelector('.me-arrow').style.transform = h ? `rotate(${h.deg}deg)` : '';
+  me.querySelector('.me-tag').textContent = level === 'stale' ? `OLD ${fmtAge(age)}` : poor ? `±${Math.round(f.acc)} m` : '';
+  accCircle.setStyle(level === 'stale'
+    ? { color: '#616161', dashArray: '4 6', fillOpacity: 0.06 }
+    : poor ? { color: '#b45309', dashArray: '8 6', fillOpacity: 0.12 } : { color: '#1565c0', dashArray: null, fillOpacity: 0.12 });
+}
+
+// Compass (optional). iPhone asks permission; Android gives it freely.
+function onOrient(e) {
+  let h = null;
+  if (typeof e.webkitCompassHeading === 'number') h = e.webkitCompassHeading;
+  else if (e.absolute && e.alpha != null) h = (360 - e.alpha + ((screen.orientation && screen.orientation.angle) || 0)) % 360;
+  if (h != null) { compass.deg = h; compass.at = Date.now(); }
+}
+async function setCompass(on, fromUser) {
+  if (on && fromUser && typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    try {
+      if (await DeviceOrientationEvent.requestPermission() !== 'granted') throw new Error('denied');
+    } catch { toast('Compass permission was not given.'); on = false; }
+  }
+  window.removeEventListener('deviceorientationabsolute', onOrient);
+  window.removeEventListener('deviceorientation', onOrient);
+  if (on) { window.addEventListener('deviceorientationabsolute', onOrient); window.addEventListener('deviceorientation', onOrient); }
+  compass.on = on; $('compassToggle').checked = on; pref('compass', on ? '1' : '0');
+}
+$('compassToggle').onchange = e => setCompass(e.target.checked, true);
+
+// =====================================================================
+// Local database (IndexedDB): recordings survive restarts and crashes
+// =====================================================================
+let dbPromise = null;
+function openDb() {
+  if (!dbPromise) dbPromise = new Promise((resolve, reject) => {
+    const r = indexedDB.open('trailmap', 1);
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      d.createObjectStore('tracks', { keyPath: 'id', autoIncrement: true });
+      d.createObjectStore('points', { keyPath: 'id', autoIncrement: true }).createIndex('track', 'trackId');
+    };
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+  return dbPromise;
+}
+const reqDone = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+const txDone = tx => new Promise((res, rej) => { tx.oncomplete = () => res(); tx.onerror = tx.onabort = () => rej(tx.error); });
+async function putTrack(t) { const d = await openDb(); return reqDone(d.transaction('tracks', 'readwrite').objectStore('tracks').put(t)); }
+async function getTracks() { const d = await openDb(); return reqDone(d.transaction('tracks').objectStore('tracks').getAll()); }
+async function getPoints(id) { const d = await openDb(); return reqDone(d.transaction('points').objectStore('points').index('track').getAll(id)); }
+// A point and its track summary are saved together, so they never disagree.
+async function savePoint(p, t) {
+  const d = await openDb(), tx = d.transaction(['points', 'tracks'], 'readwrite');
+  tx.objectStore('points').add(p); tx.objectStore('tracks').put(t);
+  return txDone(tx);
+}
+async function deleteTrack(id) {
+  const d = await openDb(), tx = d.transaction(['tracks', 'points'], 'readwrite');
+  tx.objectStore('tracks').delete(id);
+  const pts = tx.objectStore('points');
+  pts.index('track').openKeyCursor(IDBKeyRange.only(id)).onsuccess = e => {
+    const c = e.target.result; if (c) { pts.delete(c.primaryKey); c.continue(); }
+  };
+  return txDone(tx);
+}
+
+// =====================================================================
+// Run recording
+// =====================================================================
+const crumbLayer = L.polyline([], { color: '#283593', weight: 3.5, opacity: 0.9, interactive: false });
+const recorder = {
+  status: 'idle', track: null, last: null, segs: [], skippedPoor: 0, skippedJump: 0, chain: Promise.resolve(), saveError: null,
+
+  async start() {
+    if (this.status !== 'idle') return;
+    startGps();
+    const now = new Date();
+    const t = { name: `Run ${now.toLocaleDateString()} ${now.toTimeString().slice(0, 5)}`, startedAt: now.toISOString(), endedAt: null,
+      status: 'recording', distanceM: 0, points: 0, activeMs: 0, activeSince: Date.now(), segment: 0 };
+    t.id = await putTrack(t);
+    Object.assign(this, { status: 'recording', track: t, last: null, segs: [[]], skippedPoor: 0, skippedJump: 0 });
+    crumbLayer.setLatLngs([]).addTo(map);
+    toast('Recording started. It only records while the app is open on screen.');
+    renderRec();
+  },
+
+  add(r) {
+    if (this.status !== 'recording') return;
+    const t = this.track, last = this.last;
+    if (r.acc == null || r.acc > CONFIG.recordMaxAccuracyM) { this.skippedPoor++; return; }
+    let d = 0;
+    if (last) {
+      const dt = (r.t - last.t) / 1000;
+      if (dt <= 0) return;
+      d = map.distance([last.lat, last.lon], [r.lat, r.lon]);
+      // A jump faster than a runner can move, and bigger than both readings'
+      // error, is a GPS glitch rather than real movement.
+      if (d / dt > CONFIG.recordMaxSpeedMs && d > r.acc + last.acc) { this.skippedJump++; return; }
+      if (d < CONFIG.recordMinMoveM && dt < CONFIG.recordMaxGapSec) return;
+    }
+    this.last = r;
+    t.distanceM += d; t.points++;
+    this.segs[this.segs.length - 1].push([r.lat, r.lon]);
+    crumbLayer.setLatLngs(this.segs);
+    const p = { trackId: t.id, segment: t.segment, latitude: r.lat, longitude: r.lon, altitude: r.alt,
+      horizontalAccuracy: r.acc, heading: r.heading, speed: r.speed, recordedAt: new Date(r.t).toISOString() };
+    const snapshot = { ...t };
+    this.chain = this.chain.then(() => savePoint(p, snapshot)).then(() => { this.saveError = null; })
+      .catch(err => { this.saveError = err.message || String(err); console.error('Saving point failed', err); });
+    renderRec();
+  },
+
+  pause() {
+    if (this.status !== 'recording') return;
+    const t = this.track;
+    t.activeMs += Date.now() - t.activeSince; t.activeSince = null; t.status = 'paused';
+    this.status = 'paused';
+    this.chain = this.chain.then(() => putTrack({ ...t }));
+    renderRec();
+  },
+
+  resume() {
+    if (this.status !== 'paused') return;
+    startGps();
+    const t = this.track;
+    t.status = 'recording'; t.activeSince = Date.now(); t.segment++;
+    this.status = 'recording'; this.last = null; this.segs.push([]);
+    crumbLayer.addTo(map);
+    this.chain = this.chain.then(() => putTrack({ ...t }));
+    $('resumeBanner').style.display = 'none';
+    renderRec();
+  },
+
+  async stop() {
+    if (this.status === 'idle') return;
+    const t = this.track;
+    if (t.activeSince) t.activeMs += Date.now() - t.activeSince;
+    t.activeSince = null; t.status = 'done'; t.endedAt = new Date().toISOString();
+    await (this.chain = this.chain.then(() => putTrack({ ...t })));
+    Object.assign(this, { status: 'idle', track: null, last: null, segs: [] });
+    crumbLayer.remove();
+    $('resumeBanner').style.display = 'none';
+    toast(`Saved: ${km(t.distanceM)}, ${t.points} points. Export it from ☰ › My recordings.`);
+    renderRec(); renderTracks();
+  },
+
+  // After a crash or restart: reload the unfinished recording, paused.
+  async recover() {
+    const open = (await getTracks()).filter(t => t.status !== 'done').sort((a, b) => b.id - a.id)[0];
+    if (!open) return;
+    const pts = await getPoints(open.id);
+    if (open.activeSince) {
+      const lastT = pts.length ? Date.parse(pts[pts.length - 1].recordedAt) : open.activeSince;
+      open.activeMs += Math.max(0, lastT - open.activeSince); open.activeSince = null;
+    }
+    open.status = 'paused';
+    await putTrack(open);
+    const segs = [];
+    for (const p of pts) { (segs[p.segment] = segs[p.segment] || []).push([p.latitude, p.longitude]); }
+    Object.assign(this, { status: 'paused', track: open, last: null, segs: segs.filter(Boolean) });
+    if (!this.segs.length) this.segs = [[]];
+    crumbLayer.setLatLngs(this.segs).addTo(map);
+    $('resumeText').textContent = `An unfinished recording was found: ${km(open.distanceM)}, ${open.points} points. Nothing was lost.`;
+    $('resumeBanner').style.display = 'block';
+    renderRec();
+  },
+};
+
+const fmtDur = ms => { const s = Math.floor(ms / 1000); return `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
+const activeMs = t => t.activeMs + (t.activeSince ? Date.now() - t.activeSince : 0);
+
+function renderRec() {
+  const r = recorder, on = r.status !== 'idle';
+  $('recInfo').hidden = !on;
+  $('recBtn').classList.toggle('on', r.status === 'recording');
+  if (!on) return;
+  const t = r.track;
+  $('recWhat').textContent = r.status === 'recording' ? '● RECORDING' : '❚❚ PAUSED';
+  $('recWhat').className = 'what' + (r.status === 'recording' ? ' on' : '');
+  $('pauseBtn').textContent = r.status === 'recording' ? 'Pause' : 'Resume';
+  const notes = [];
+  if (r.skippedPoor) notes.push(`${r.skippedPoor} poor readings skipped`);
+  if (r.skippedJump) notes.push(`${r.skippedJump} GPS jumps ignored`);
+  if (r.saveError) notes.push(`⚠ Could not save: ${r.saveError}`);
+  if (r.status === 'recording' && (!gps.fix || freshness(gps.fix).level === 'stale')) notes.push('⚠ Waiting for GPS: nothing is being recorded');
+  $('recSub').textContent = `${km(t.distanceM)} · ${fmtDur(activeMs(t))} · ${t.points} points` + (notes.length ? ' · ' + notes.join(' · ') : '');
+}
+
+$('recBtn').onclick = () => {
+  if (recorder.status === 'idle') recorder.start();
+  else toast('Use Pause or Stop in the panel at the bottom.');
+};
+$('pauseBtn').onclick = () => (recorder.status === 'recording' ? recorder.pause() : recorder.resume());
+$('stopBtn').onclick = () => { if (confirm('Stop and save this recording?')) recorder.stop(); };
+$('resumeBtn').onclick = () => recorder.resume();
+$('finishBtn').onclick = () => recorder.stop();
+
+// ---------- Export (GPX and GeoJSON) ----------
+const xmlEsc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
+
+function buildGpx(t, pts) {
+  const segs = [];
+  for (const p of pts) (segs[p.segment] = segs[p.segment] || []).push(p);
+  const ext = p => [
+    p.horizontalAccuracy != null ? `<tm:accuracy>${p.horizontalAccuracy.toFixed(1)}</tm:accuracy>` : '',
+    p.speed != null ? `<tm:speed>${p.speed.toFixed(2)}</tm:speed>` : '',
+    p.heading != null ? `<tm:heading>${p.heading.toFixed(1)}</tm:heading>` : '',
+  ].join('');
+  const trkpt = p => `<trkpt lat="${p.latitude.toFixed(7)}" lon="${p.longitude.toFixed(7)}">` +
+    (p.altitude != null ? `<ele>${p.altitude.toFixed(1)}</ele>` : '') + `<time>${p.recordedAt}</time>` +
+    `<extensions>${ext(p)}</extensions></trkpt>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Nyanga Trail Map ${xmlEsc(APP_VERSION)}" xmlns="http://www.topografix.com/GPX/1/1" xmlns:tm="https://nyanga-trail-map/gpx-ext/1">
+<metadata><name>${xmlEsc(t.name)}</name><time>${t.startedAt}</time></metadata>
+<trk><name>${xmlEsc(t.name)}</name>
+${segs.filter(Boolean).map(s => `<trkseg>\n${s.map(trkpt).join('\n')}\n</trkseg>`).join('\n')}
+</trk>
+</gpx>
+`;
+}
+
+function buildGeoJson(t, pts) {
+  const segs = [];
+  for (const p of pts) (segs[p.segment] = segs[p.segment] || []).push(p);
+  const list = segs.filter(Boolean);
+  return {
+    type: 'FeatureCollection',
+    features: [{
+      type: 'Feature',
+      properties: { name: t.name, startedAt: t.startedAt, endedAt: t.endedAt, distanceM: Math.round(t.distanceM),
+        points: t.points, movingTimeSec: Math.round(t.activeMs / 1000),
+        times: list.map(s => s.map(p => p.recordedAt)), accuracyM: list.map(s => s.map(p => p.horizontalAccuracy)) },
+      // GeoJSON order is [longitude, latitude, altitude].
+      geometry: { type: 'MultiLineString', coordinates: list.map(s => s.map(p => p.altitude != null ? [p.longitude, p.latitude, p.altitude] : [p.longitude, p.latitude])) },
+    }],
+  };
+}
+
+async function saveFile(name, type, text) {
+  const file = new File([text], name, { type });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: name }); return; }
+    catch (err) { if (err.name === 'AbortError') return; }
+  }
+  const url = URL.createObjectURL(file), a = document.createElement('a');
+  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+async function exportTrack(id, kind) {
+  try {
+    const t = (await getTracks()).find(x => x.id === id), pts = await getPoints(id);
+    const base = 'run-' + t.startedAt.slice(0, 16).replace(/[:T]/g, '-');
+    if (kind === 'gpx') await saveFile(base + '.gpx', 'application/gpx+xml', buildGpx(t, pts));
+    else await saveFile(base + '.geojson', 'application/geo+json', JSON.stringify(buildGeoJson(t, pts)));
+  } catch (err) { alert('Export failed: ' + (err.message || err)); }
+}
+
+let shownTrack = null;
+async function showTrack(id) {
+  if (shownTrack) shownTrack.remove();
+  const pts = await getPoints(id);
+  if (!pts.length) { toast('This recording has no points.'); return; }
+  const segs = [];
+  for (const p of pts) (segs[p.segment] = segs[p.segment] || []).push([p.latitude, p.longitude]);
+  shownTrack = L.polyline(segs.filter(Boolean), { color: '#6a1b9a', weight: 4, opacity: 0.85, interactive: false }).addTo(map);
+  closeSheet(); setFollow(false);
+  map.fitBounds(shownTrack.getBounds(), { padding: [40, 40] });
+}
+
+async function renderTracks() {
+  const list = $('trackList');
+  let tracks = [];
+  try { tracks = (await getTracks()).sort((a, b) => b.id - a.id); }
+  catch (err) { list.innerHTML = `<div class="small">Could not open saved recordings: ${escapeHtml(err.message || err)}</div>`; return; }
+  if (!tracks.length) { list.innerHTML = '<div class="small" style="margin-top:6px">No recordings yet. Tap the red button on the map to start.</div>'; return; }
+  list.innerHTML = tracks.map(t => {
+    const active = recorder.track && recorder.track.id === t.id;
+    return `<div class="track" data-id="${t.id}">
+      <b>${escapeHtml(t.name)}</b>${active ? ' <span class="badge warn">in progress</span>' : ''}
+      <div class="small">${km(t.distanceM)} · ${fmtDur(activeMs(t))} · ${t.points} points</div>
+      <div class="acts">
+        <button class="pill" data-act="show">Show on map</button>
+        <button class="pill" data-act="gpx">Export GPX</button>
+        <button class="pill" data-act="geojson">Export GeoJSON</button>
+        ${active ? '' : '<button class="pill danger" data-act="del">Delete</button>'}
+      </div></div>`;
+  }).join('');
+}
+$('trackList').onclick = async e => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const id = +btn.closest('.track').dataset.id, act = btn.dataset.act;
+  if (act === 'show') showTrack(id);
+  else if (act === 'gpx' || act === 'geojson') exportTrack(id, act);
+  else if (act === 'del' && confirm('Delete this recording? This cannot be undone.')) {
+    await deleteTrack(id);
+    if (shownTrack) { shownTrack.remove(); shownTrack = null; }
+    renderTracks();
+  }
+};
+
+// =====================================================================
+// Offline map download
+// =====================================================================
+function fetchWithTimeout(url, ms) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(t));
+}
+
 async function allTileUrls() {
-  const urls = []; let bytes = 0;
+  const urls = []; let bytes = 0; const sets = {};
   for (const dir of TILE_SETS) {
     const idx = await (await fetchWithTimeout(`${dir}/index.json`, 15000)).json();
     idx.tiles.forEach(t => urls.push(`${dir}/${t}.webp`));
-    bytes += idx.bytes;
+    bytes += idx.bytes; sets[dir] = idx.tiles.length;
   }
-  return { urls, bytes };
+  return { urls, bytes, sets };
+}
+
+async function storageInfo() {
+  if (!navigator.storage || !navigator.storage.estimate) return null;
+  try { return await navigator.storage.estimate(); } catch { return null; }
 }
 
 async function refreshOfflineStatus() {
-  const chip = $('offlineChip');
-  try {
-    const saved = localStorage.getItem('tilesSaved');
-    if (saved === TILES_TAG) {
-      chip.textContent = 'Saved offline ✓'; chip.className = 'chip good';
-      $('dlText').textContent = 'The map is saved on this phone. It works with no signal.';
-      $('dlBtn').textContent = 'Check / re-download map';
-      return;
-    }
-  } catch {}
-  chip.textContent = 'Map not saved offline'; chip.className = 'chip warn';
+  const chip = $('offlineChip'), saved = pref('tilesSaved') === TILES_TAG;
+  chip.textContent = saved ? 'Saved offline ✓' : 'Map not saved offline';
+  chip.className = 'chip ' + (saved ? 'good' : 'warn');
+  if (saved) {
+    $('dlText').textContent = 'The map is saved on this phone. It works with no signal.';
+    $('dlBtn').textContent = 'Check / repair offline map';
+  } else if (pref('tilesSaved')) {
+    $('dlText').textContent = 'A newer map is available. Download again on wifi to update it.';
+  }
+  $('dlDelete').hidden = !saved;
+  const s = await storageInfo();
+  $('storageText').textContent = s ? `This app is using ${(s.usage / 1e6).toFixed(0)} MB on this phone.` : '';
 }
 
 $('dlBtn').onclick = async () => {
@@ -115,6 +650,11 @@ $('dlBtn').onclick = async () => {
   try {
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
     const { urls, bytes } = await allTileUrls();
+    const s = await storageInfo();
+    if (s && s.quota && s.quota - s.usage < bytes * 1.5 &&
+        !confirm(`This phone may not have enough free space for the map (${(bytes / 1e6).toFixed(0)} MB). Try anyway?`)) {
+      throw new Error('Cancelled: not enough space');
+    }
     const cache = await caches.open(TILE_CACHE);
     let done = 0, failed = 0, next = 0;
     const mb = (bytes / 1e6).toFixed(0);
@@ -136,10 +676,14 @@ $('dlBtn').onclick = async () => {
       }
     }
     await Promise.all(Array.from({ length: 6 }, worker));
-    if (failed) {
-      text.textContent = `${failed} pieces did not download. Check your connection and tap the button again; it carries on where it stopped.`;
+    // Check every piece really is on the phone before calling it saved.
+    text.textContent = 'Checking…';
+    const have = new Set((await cache.keys()).map(r => new URL(r.url).pathname.split('/').slice(-4).join('/')));
+    const missing = urls.filter(u => !have.has(u.split('/').slice(-4).join('/'))).length;
+    if (failed || missing) {
+      text.textContent = `${Math.max(failed, missing)} pieces are missing. Check your connection and tap the button again; it carries on where it stopped.`;
     } else {
-      localStorage.setItem('tilesSaved', TILES_TAG);
+      pref('tilesSaved', TILES_TAG);
       text.textContent = 'Done. The map is saved on this phone.';
     }
   } catch (err) {
@@ -149,78 +693,20 @@ $('dlBtn').onclick = async () => {
   refreshOfflineStatus();
 };
 
-function fetchWithTimeout(url, ms) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), ms);
-  return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(t));
-}
-
-// ---------- GPS ----------
-let watchId = null, follow = false, lastFix = null;
-const gpsRenderer = L.svg({ pane: 'gps' });
-const dot = L.circleMarker([0, 0], { pane: 'gps', renderer: gpsRenderer, radius: 8, color: '#fff', weight: 3, fillColor: '#1e88e5', fillOpacity: 1, interactive: false });
-const ring = L.circle([0, 0], { pane: 'gps', renderer: gpsRenderer, radius: 1, color: '#1e88e5', weight: 1, fillOpacity: 0.12, interactive: false });
-
-function startGps() {
-  if (!('geolocation' in navigator)) { $('gpsMain').textContent = 'No GPS on this device'; return; }
-  if (watchId !== null) return;
-  $('gpsMain').textContent = 'Finding GPS…';
-  $('gpsSub').textContent = 'Can take up to a minute in valleys';
-  watchId = navigator.geolocation.watchPosition(onFix, onGpsError,
-    { enableHighAccuracy: true, maximumAge: 3000, timeout: 60000 });
-  try { localStorage.setItem('gpsOn', '1'); } catch {}
-}
-
-function onFix(pos) {
-  const { latitude: lat, longitude: lon, accuracy, altitude } = pos.coords;
-  const first = !lastFix;
-  lastFix = { lat, lon, accuracy, altitude, t: pos.timestamp };
-  dot.setLatLng([lat, lon]).addTo(map);
-  ring.setLatLng([lat, lon]).setRadius(accuracy).addTo(map);
-  dot.bringToFront();
-
-  const inside = bounds.contains([lat, lon]);
-  $('gpsMain').textContent = altitude != null ? `${Math.round(altitude)} m altitude` : 'Location found';
-  $('gpsSub').textContent = inside
-    ? `±${Math.round(accuracy)} m · ${lat.toFixed(5)}, ${lon.toFixed(5)}`
-    : `Outside map area (${(distanceTo(lat, lon) / 1000).toFixed(0)} km away)`;
-
-  if (inside && (follow || first)) map.setView([lat, lon], Math.max(map.getZoom(), 15), { animate: !first });
-  updateCourse();
-}
-
-function onGpsError(err) {
-  if (err.code === 1) {
-    $('gpsMain').textContent = 'Location blocked';
-    $('gpsSub').textContent = 'Allow location for this site in your phone settings';
-    stopGps();
-  } else {
-    $('gpsSub').textContent = err.code === 3 ? 'Still searching for GPS…' : 'GPS error: ' + err.message;
-  }
-}
-
-function stopGps() {
-  if (watchId !== null) navigator.geolocation.clearWatch(watchId);
-  watchId = null;
-}
-
-// Rough distance from a point to the map area, for the "outside" message.
-function distanceTo(lat, lon) {
-  const c = bounds.getCenter();
-  return map.distance([lat, lon], c);
-}
-
-$('locateBtn').onclick = () => {
-  startGps();
-  follow = true;
-  $('locateBtn').classList.add('active');
-  if (lastFix && bounds.contains([lastFix.lat, lastFix.lon])) map.setView([lastFix.lat, lastFix.lon], Math.max(map.getZoom(), 15));
+$('dlDelete').onclick = async () => {
+  if (!confirm('Delete the offline map from this phone? You will need internet to download it again. Recordings are kept.')) return;
+  await caches.delete(TILE_CACHE);
+  try { localStorage.removeItem('tilesSaved'); } catch {}
+  $('dlBtn').textContent = 'Download map for offline';
+  $('dlText').textContent = 'Offline map deleted. Download it again on wifi before the race.';
+  refreshOfflineStatus();
 };
-map.on('dragstart', () => { follow = false; $('locateBtn').classList.remove('active'); });
 
-// ---------- Course (GPX) ----------
+// =====================================================================
+// Race course (GPX)
+// =====================================================================
 // Course points are projected to flat metres; fine at this scale (~40 km).
-const LAT0 = -18.25, KX = 111320 * Math.cos(LAT0 * Math.PI / 180), KY = 110574;
+const LAT0 = -18.3, KX = 111320 * Math.cos(LAT0 * Math.PI / 180), KY = 110574;
 let course = null, courseLayer = null, lastAlong = null;
 
 function parseGpx(text) {
@@ -285,7 +771,6 @@ function nearestOnCourse(c, lat, lon, prevAlong = null) {
 }
 
 const km = m => (m / 1000).toFixed(m < 10000 ? 2 : 1) + ' km';
-const compass = b => ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(b / 45) % 8];
 
 function drawCourse() {
   if (courseLayer) courseLayer.remove();
@@ -295,7 +780,6 @@ function drawCourse() {
     L.polyline(ll, { color: '#fff', weight: 7, opacity: 0.9, interactive: false }),
     L.polyline(ll, { color: '#e65100', weight: 4, interactive: false }),
   ]);
-  // Kilometre markers.
   for (let k = 1000, i = 0; k < course.total; k += 1000) {
     while (course.cum[i + 1] < k) i++;
     const t = (k - course.cum[i]) / (course.cum[i + 1] - course.cum[i]);
@@ -306,7 +790,6 @@ function drawCourse() {
   courseLayer.addLayer(L.marker(ll[ll.length - 1], { icon: label('FINISH', 'wpt'), interactive: false }));
   for (const w of course.wpts) courseLayer.addLayer(L.marker([w.lat, w.lon], { icon: label(escapeHtml(w.name), 'wpt'), interactive: false }));
   courseLayer.addTo(map);
-  dot.bringToFront();
 
   $('courseText').textContent = `${course.name}: ${km(course.total)}` +
     (course.hasEle ? `, ${Math.round(course.climbLeft[0])} m of climbing` : '') +
@@ -318,20 +801,21 @@ function drawCourse() {
 
 function updateCourse() {
   if (!course) return;
-  if (!lastFix) {
+  const f = gps.fix;
+  if (!f) {
     $('courseStatus').textContent = 'Course loaded'; $('courseStatus').className = 'course-status';
     $('courseDone').textContent = `Total ${km(course.total)}`;
     $('courseLeft').textContent = ''; $('courseDir').textContent = ''; $('courseNext').textContent = '';
     return;
   }
-  const n = nearestOnCourse(course, lastFix.lat, lastFix.lon, lastAlong);
-  const tolerance = Math.max(40, lastFix.accuracy + 15);
+  const n = nearestOnCourse(course, f.lat, f.lon, lastAlong);
+  const tolerance = Math.max(40, f.acc + 15);
   const onCourse = n.d <= tolerance;
   if (onCourse) lastAlong = n.along;
   const st = $('courseStatus');
-  st.textContent = onCourse ? 'On course ✓' : `⚠ ${Math.round(n.d)} m off course`;
+  st.textContent = onCourse ? '✓ On course' : `⚠ ${Math.round(n.d)} m off course`;
   st.className = 'course-status ' + (onCourse ? 'ok' : 'off');
-  $('courseDir').textContent = onCourse ? '' : `Course is ${compass(n.bearing)} of you`;
+  $('courseDir').textContent = onCourse ? '' : `Course is ${compassPoint(n.bearing)} of you`;
   $('courseDone').textContent = `${km(n.along)} done`;
   const climb = course.hasEle ? ` · ${Math.round(course.climbLeft[n.i])} m climb left` : '';
   $('courseLeft').textContent = `${km(course.total - n.along)} to go${climb}`;
@@ -346,8 +830,9 @@ $('gpxInput').onchange = async e => {
   try {
     const raw = parseGpx(await file.text());
     course = prepareCourse(raw); lastAlong = null;
-    localStorage.setItem('course', JSON.stringify(raw));
+    pref('course', JSON.stringify(raw));
     drawCourse();
+    setFollow(false);
     map.fitBounds(L.latLngBounds(course.pts.map(p => [p[0], p[1]])), { padding: [30, 30] });
     closeSheet();
   } catch (err) {
@@ -362,7 +847,9 @@ $('gpxClear').onclick = () => {
   $('gpxClear').hidden = true; $('courseInfo').hidden = true;
 };
 
-// ---------- Screen wake lock ----------
+// =====================================================================
+// Screen wake lock, debug overlay, menu
+// =====================================================================
 let wakeLock = null;
 async function setWake(on) {
   try {
@@ -376,22 +863,68 @@ document.addEventListener('visibilitychange', () => {
 });
 if (!('wakeLock' in navigator)) $('wakeToggle').disabled = true;
 
-// ---------- Menu sheet ----------
-function openSheet() { $('sheetBg').style.display = 'block'; requestAnimationFrame(() => $('sheet').classList.add('open')); }
+let tileCounts = '';
+function renderDebug() {
+  const on = $('debugToggle').checked;
+  $('debug').style.display = on ? 'block' : 'none';
+  if (!on) return;
+  const f = gps.fix, c = map.getCenter(), h = currentHeading();
+  const lines = [
+    `lat/lon  ${f ? `${f.lat.toFixed(7)}, ${f.lon.toFixed(7)}` : '-'}`,
+    `accuracy ${f ? `±${f.acc.toFixed(1)} m` : '-'}   alt ${f && f.alt != null ? f.alt.toFixed(1) + ' m' : '-'}`,
+    `heading  gps ${f && f.heading != null ? f.heading.toFixed(0) : '-'} · compass ${compass.deg != null ? compass.deg.toFixed(0) : '-'} · used ${h ? h.src : 'none'}`,
+    `speed    ${f && f.speed != null ? f.speed.toFixed(2) + ' m/s' : '-'}`,
+    `age      ${f ? freshness(f).age.toFixed(1) + ' s (' + freshness(f).level + ')' : '-'}`,
+    `zoom     ${map.getZoom()}   centre ${c.lat.toFixed(5)}, ${c.lng.toFixed(5)}`,
+    `inside   race map ${f ? raceBounds.contains([f.lat, f.lon]) : '-'} · any map ${f ? bounds.contains([f.lat, f.lon]) : '-'}`,
+    `gps      ${gps.state} · perm ${gps.perm} · follow ${gps.follow}`,
+    `rec      ${recorder.status}${recorder.track ? ` #${recorder.track.id} ${recorder.track.points} pts` : ''}`,
+    `app      ${APP_VERSION} · tiles ${TILES_TAG} · saved ${pref('tilesSaved') === TILES_TAG}`,
+    `pieces   ${tileCounts || '…'}`,
+    `race src sha256 ${RACE_SOURCE_SHA256.slice(0, 16)}…`,
+  ];
+  $('debug').textContent = lines.join('\n');
+}
+$('debugToggle').onchange = e => {
+  pref('debug', e.target.checked ? '1' : '0');
+  if (e.target.checked && !tileCounts) {
+    allTileUrls().then(r => { tileCounts = Object.entries(r.sets).map(([k, v]) => `${k} ${v}`).join(' · '); }).catch(() => { tileCounts = 'offline'; });
+  }
+  renderDebug();
+};
+
+function openSheet() {
+  renderTracks(); refreshOfflineStatus();
+  $('sheetBg').style.display = 'block'; requestAnimationFrame(() => $('sheet').classList.add('open'));
+}
 function closeSheet() { $('sheet').classList.remove('open'); setTimeout(() => ($('sheetBg').style.display = 'none'), 200); }
 $('menuBtn').onclick = openSheet;
 $('closeSheet').onclick = closeSheet;
 $('sheetBg').onclick = closeSheet;
 
-// ---------- Start up (local data only, never waits on the network) ----------
+// Keep the side buttons just above the bottom panel as it grows and shrinks.
+const fitButtons = () => document.documentElement.style.setProperty('--panel-h', $('panel').offsetHeight + 'px');
+if ('ResizeObserver' in window) new ResizeObserver(fitButtons).observe($('panel'));
+fitButtons();
+
+// =====================================================================
+// Start up: local data only, never waits on the network
+// =====================================================================
 try {
-  const saved = localStorage.getItem('course');
+  const saved = pref('course');
   if (saved) { course = prepareCourse(JSON.parse(saved)); drawCourse(); }
 } catch (err) { console.warn('Saved course unreadable', err); }
 refreshOfflineStatus();
-try { if (localStorage.getItem('gpsOn') === '1') startGps(); } catch {}
+if (pref('compass') === '1') setCompass(true, false);
+if (pref('debug') === '1') { $('debugToggle').checked = true; $('debugToggle').onchange({ target: $('debugToggle') }); }
+if (pref('gpsOn') === '1') startGps();
+renderGps();
+recorder.recover().catch(err => console.error('Could not check for unfinished recording', err));
+setInterval(() => { renderGps(); renderRec(); renderDebug(); }, 1000);
 
-// ---------- Service worker ----------
+// =====================================================================
+// Service worker
+// =====================================================================
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').then(reg => {
     reg.addEventListener('updatefound', () => {
@@ -401,5 +934,9 @@ if ('serviceWorker' in navigator) {
       });
     });
   }).catch(err => console.warn('Service worker failed', err));
-  $('updateBanner').onclick = () => location.reload();
+  // Never reload by itself mid-run: the runner chooses when.
+  $('updateBtn').onclick = () => {
+    if (recorder.status === 'recording' && !confirm('A recording is running. It will be paused and can be resumed after the update. Update now?')) return;
+    location.reload();
+  };
 }

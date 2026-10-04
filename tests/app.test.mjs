@@ -1,0 +1,191 @@
+// End-to-end checks in a real (headless) browser.
+// Run: npm test   (optional: node tests/app.test.mjs <folder for screenshots>)
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
+
+const OUT = process.argv[2] || null;
+const PORT = 8093, URL = `http://localhost:${PORT}/`;
+const EDDY = { latitude: -18.395, longitude: 32.835 };     // on the race map
+const NYANGANI = { latitude: -18.2935, longitude: 32.8335 }; // on the test course
+const HARARE = { latitude: -17.83, longitude: 31.05 };      // far outside
+
+const server = spawn(process.execPath, ['tools/serve.mjs', String(PORT)]);
+await new Promise(r => server.stdout.once('data', r));
+const browser = await chromium.launch();
+let failures = 0;
+const check = (name, ok, detail = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`); if (!ok) failures++; };
+const shot = async (page, name) => { if (OUT) await page.screenshot({ path: `${OUT}/${name}.png` }); };
+
+async function newPage(opts) {
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 800 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, ...opts });
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('console', m => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', e => errors.push(e.message));
+  page.on('dialog', d => d.accept());
+  return { ctx, page, errors };
+}
+const text = (page, sel) => page.locator(sel).innerText();
+const fakeFix = (page, f) => page.evaluate(f => onFix({ coords: { accuracy: 6, altitude: 1200, altitudeAccuracy: 8, heading: null, speed: null, ...f }, timestamp: f.t || Date.now() }), f);
+
+try {
+  // ------------------------------------------------------------------
+  // Permission denied
+  {
+    const { ctx, page } = await newPage({ permissions: [] });
+    await page.goto(URL);
+    await page.click('#locateBtn');
+    await page.waitForFunction(() => document.getElementById('gpsBadges').textContent.includes('blocked'), null, { timeout: 10000 }).catch(() => {});
+    check('Permission denied shows "Location blocked" with instructions', (await text(page, '#gpsBadges')).includes('Location blocked') && (await text(page, '#gpsHint')).includes('Settings'), await text(page, '#gpsBadges'));
+    await ctx.close();
+  }
+
+  const { ctx, page, errors } = await newPage({ permissions: ['geolocation'], geolocation: { ...EDDY, accuracy: 8 } });
+  await page.goto(URL);
+  await page.waitForFunction(() => navigator.serviceWorker.controller || navigator.serviceWorker.ready);
+
+  // ------------------------------------------------------------------
+  // GPS states
+  await page.click('#locateBtn');
+  await page.waitForFunction(() => document.getElementById('gpsBadges').textContent.includes('GPS live'));
+  check('Current GPS: live badge, raw coordinates shown', (await text(page, '#gpsCoords')).includes('-18.395000, 32.835000'), `${await text(page, '#gpsBadges')} | ${await text(page, '#gpsCoords')}`);
+  check('Map follows and is inside race map', await page.evaluate(() => gps.follow && raceBounds.contains(map.getCenter())));
+  await shot(page, '1-live');
+
+  await ctx.setGeolocation({ ...EDDY, accuracy: 120 });
+  await page.waitForFunction(() => document.getElementById('gpsBadges').textContent.includes('Poor accuracy'));
+  const tag = await page.evaluate(() => meMarker.getElement().querySelector('.me-tag').textContent);
+  check('Poor accuracy: warning badge + text tag on marker', tag.includes('±120'), `${await text(page, '#gpsBadges')} | tag "${tag}"`);
+  await shot(page, '2-poor');
+
+  await page.evaluate(() => { CONFIG.currentMaxAgeSec = 1; CONFIG.delayedMaxAgeSec = 2; });
+  await page.waitForFunction(() => document.getElementById('gpsBadges').textContent.includes('OLD POSITION'), null, { timeout: 8000 }).catch(() => {});
+  const cls = await page.evaluate(() => meMarker.getElement().firstChild.className);
+  check('Stale reading: "OLD POSITION" badge, grey marker with OLD tag', (await text(page, '#gpsBadges')).includes('OLD POSITION') && cls.includes('stale'), `${await text(page, '#gpsBadges')} | ${cls}`);
+  await shot(page, '3-stale');
+  await page.evaluate(() => { CONFIG.currentMaxAgeSec = 10; CONFIG.delayedMaxAgeSec = 30; });
+
+  await fakeFix(page, { latitude: EDDY.latitude, longitude: EDDY.longitude, heading: 90, speed: 3 });
+  const hd = await text(page, '#stHeading');
+  const hasArrow = await page.evaluate(() => meMarker.getElement().firstChild.classList.contains('has-heading'));
+  check('Heading while moving: 90° E and arrow shown', hd.includes('90° E') && hasArrow, `${hd} arrow=${hasArrow}`);
+  await fakeFix(page, { latitude: EDDY.latitude, longitude: EDDY.longitude, heading: null, speed: 0 });
+  const noArrow = await page.evaluate(() => !meMarker.getElement().firstChild.classList.contains('has-heading'));
+  check('Missing heading: "n/a" and no arrow', (await text(page, '#stHeading')) === 'n/a' && noArrow);
+
+  await ctx.setGeolocation({ ...HARARE, accuracy: 10 });
+  await page.waitForFunction(() => document.getElementById('gpsBadges').textContent.includes('Outside map'));
+  const pos = await page.evaluate(() => meMarker.getLatLng());
+  check('Outside map: badge shown, marker NOT moved onto the map', Math.abs(pos.lat - HARARE.latitude) < 1e-6 && Math.abs(pos.lng - HARARE.longitude) < 1e-6, await text(page, '#gpsBadges'));
+  await page.click('#locateBtn');
+  check('Centre-on-me refuses when far away', (await text(page, '#toast')).includes('km from the map area'), await text(page, '#toast'));
+  await ctx.setGeolocation({ ...EDDY, accuracy: 8 });
+  await page.waitForFunction(() => document.getElementById('gpsBadges').textContent.includes('GPS live'));
+
+  await page.click('#detailsBtn');
+  const det = await text(page, '#gpsDetails');
+  check('Details: permission, reading time, age, speed, accuracy', ['Permission', 'Reading time', 'Reading age', 'Speed', 'Accuracy'].every(k => det.includes(k)));
+  await page.click('#detailsBtn');
+
+  // Map buttons
+  const z0 = await page.evaluate(() => map.getZoom());
+  await page.click('#zoomOutBtn'); await page.waitForTimeout(400);
+  check('Zoom out button', (await page.evaluate(() => map.getZoom())) === z0 - 1);
+  await page.click('#fitBtn'); await page.waitForTimeout(400);
+  check('Fit-map button shows the whole race map', await page.evaluate(() => map.getBounds().pad(0.05).contains(raceBounds) && !gps.follow));
+
+  // ------------------------------------------------------------------
+  // Recording, with a GPS glitch and a poor reading mixed in
+  await page.click('#recBtn');
+  await page.waitForFunction(() => recorder.status === 'recording' && recorder.track && recorder.track.id);
+  const t0 = Date.now() + 1000;
+  for (let i = 0; i < 10; i++) {
+    await fakeFix(page, { latitude: EDDY.latitude + i * 0.00027, longitude: EDDY.longitude, t: t0 + i * 10000, speed: 3, heading: 0 });
+    if (i === 4) await fakeFix(page, { latitude: EDDY.latitude + 0.05, longitude: EDDY.longitude, t: t0 + i * 10000 + 1000 }); // 5 km jump in 1 s
+    if (i === 6) await fakeFix(page, { latitude: EDDY.latitude + i * 0.00027 + 0.0001, longitude: EDDY.longitude, accuracy: 200, t: t0 + i * 10000 + 2000 });
+  }
+  const rec1 = await page.evaluate(async () => { await recorder.chain; return { pts: recorder.track.points, d: recorder.track.distanceM, jump: recorder.skippedJump, poor: recorder.skippedPoor }; });
+  check('Recording keeps 10 good points, ~270 m', rec1.pts === 10 && Math.abs(rec1.d - 269) < 10, JSON.stringify(rec1));
+  check('Glitch and poor reading filtered out', rec1.jump === 1 && rec1.poor === 1);
+  check('Breadcrumb line drawn', await page.evaluate(() => map.hasLayer(crumbLayer) && crumbLayer.getLatLngs().flat().length === 10));
+  await shot(page, '4-recording');
+
+  // Simulate the app being closed mid-run
+  await page.reload();
+  await page.waitForFunction(() => recorder.status === 'paused', null, { timeout: 10000 }).catch(() => {});
+  const banner = await page.locator('#resumeBanner').isVisible();
+  check('After restart: recording recovered (paused, 10 points, banner shown)',
+    banner && (await page.evaluate(() => recorder.status === 'paused' && recorder.track.points === 10)), await text(page, '#resumeText').catch(() => ''));
+  await shot(page, '5-recovered');
+  await page.click('#resumeBtn');
+  const t1 = Date.now() + 200000;
+  for (let i = 0; i < 2; i++) await fakeFix(page, { latitude: EDDY.latitude + 0.003 + i * 0.0003, longitude: EDDY.longitude, t: t1 + i * 10000 });
+  await page.click('#stopBtn');
+  await page.waitForFunction(() => recorder.status === 'idle');
+
+  const exp = await page.evaluate(async () => {
+    const t = (await getTracks()).find(x => x.status === 'done'), pts = await getPoints(t.id);
+    const gpx = buildGpx(t, pts), gj = buildGeoJson(t, pts);
+    const doc = new DOMParser().parseFromString(gpx, 'application/xml');
+    return {
+      valid: !doc.querySelector('parsererror'), trkpt: doc.getElementsByTagName('trkpt').length, segs: doc.getElementsByTagName('trkseg').length,
+      ele: doc.getElementsByTagName('ele').length, acc: gpx.includes('<tm:accuracy>'), time: doc.getElementsByTagName('time').length,
+      first: gj.features[0].geometry.coordinates[0][0], parts: gj.features[0].geometry.coordinates.length,
+    };
+  });
+  check('GPX export: valid, 12 points, 2 segments (paused gap), heights, times, accuracy', exp.valid && exp.trkpt === 12 && exp.segs === 2 && exp.ele === 12 && exp.acc && exp.time === 13, JSON.stringify(exp));
+  check('GeoJSON export: [longitude, latitude, altitude] order', Math.abs(exp.first[0] - 32.835) < 1e-6 && Math.abs(exp.first[1] - -18.395) < 1e-6 && exp.parts === 2, JSON.stringify(exp.first));
+
+  await page.click('#menuBtn'); await page.waitForTimeout(400);
+  check('Recording listed in menu with export buttons', (await text(page, '#trackList')).includes('Export GPX'));
+
+  // ------------------------------------------------------------------
+  // Course
+  await page.setInputFiles('#gpxInput', 'tests/test-course.gpx');
+  await page.waitForSelector('#courseInfo:not([hidden])');
+  await fakeFix(page, NYANGANI);
+  check('Course: on course near CP1', (await text(page, '#courseStatus')).includes('On course'), `${await text(page, '#courseDone')} | ${await text(page, '#courseNext')}`);
+  await fakeFix(page, { latitude: -18.2900, longitude: 32.8400 });
+  check('Course: off-course warning with direction', (await text(page, '#courseStatus')).includes('off course') && (await text(page, '#courseDir')).includes('SW'), await text(page, '#courseStatus'));
+  await page.evaluate(() => $('gpxClear').click());
+
+  // ------------------------------------------------------------------
+  // Offline download, then full reload with the internet off
+  await ctx.setGeolocation({ ...EDDY, accuracy: 8 });
+  await page.evaluate(() => openSheet()); await page.waitForTimeout(300);
+  await page.click('#dlBtn');
+  await page.waitForFunction(() => /saved on this phone|missing|failed/.test(document.getElementById('dlText').textContent), null, { timeout: 180000 });
+  check('Map download (both maps) verified', (await text(page, '#dlText')).includes('saved on this phone'), await text(page, '#dlText'));
+  await page.click('#closeSheet'); await page.waitForTimeout(300);
+
+  await ctx.setOffline(true);
+  await page.reload();
+  await page.waitForTimeout(2500);
+  await page.evaluate(() => { map.setView([-18.395, 32.835], 16); });
+  await page.waitForTimeout(1500);
+  const tiles = await page.evaluate(() => [...document.querySelectorAll('.leaflet-tile')].map(i => ({ ok: i.complete && i.naturalWidth > 0, race: i.src.includes('turaco') })));
+  check('Offline: race map pieces load', tiles.filter(t => t.race && t.ok).length > 4 && !tiles.some(t => t.race && !t.ok), `${tiles.filter(t => t.race && t.ok).length} race pieces`);
+  await page.evaluate(() => { map.setView([-18.30, 32.70], 15); });
+  await page.waitForTimeout(1500);
+  const broken = await page.evaluate(() => [...document.querySelectorAll('.leaflet-tile')].filter(i => i.complete && i.naturalWidth === 0).length);
+  check('Offline: contour map pieces load outside race map', broken === 0, `${broken} missing`);
+  check('Offline: recordings still there', await page.evaluate(async () => (await getTracks()).length === 1));
+  await page.evaluate(() => { map.setView([-18.395, 32.835], 15); });
+  await page.waitForTimeout(800);
+  await shot(page, '6-offline');
+  await ctx.setOffline(false);
+
+  await page.evaluate(() => openSheet()); await page.waitForTimeout(300);
+  await page.click('#dlDelete');
+  await page.waitForFunction(() => document.getElementById('offlineChip').textContent.includes('not saved'));
+  check('Delete offline map', true);
+
+  check('No console errors', errors.length === 0, errors.join(' | '));
+  await ctx.close();
+} catch (err) {
+  check('Test run crashed', false, err.stack);
+} finally {
+  await browser.close(); server.kill();
+}
+console.log(failures ? `\n${failures} check(s) FAILED` : '\nAll checks passed');
+process.exitCode = failures ? 1 : 0;

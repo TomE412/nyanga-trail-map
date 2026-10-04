@@ -13,64 +13,110 @@
 <link rel="stylesheet" href="vendor/leaflet.css">
 <style>
   :root {
-    --green: #1f4d3a; --blue: #1e88e5; --red: #d32f2f; --ok: #2e7d32;
-    --panel: rgba(255,255,255,0.96); --text: #1d1d1b; --muted: #6b6b66;
+    --green: #1f4d3a; --blue: #1565c0; --red: #c62828; --amber: #b45309; --ok: #1b5e20;
+    --panel: #ffffff; --text: #111; --muted: #555; --panel-h: 120px;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: #e9e6dc; color: var(--text);
     font: 15px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     -webkit-tap-highlight-color: transparent; overscroll-behavior: none; }
   #map { position: fixed; inset: 0; background: #e9e6dc; }
+  button { font: inherit; color: inherit; }
 
   .topbar { position: fixed; z-index: 1000; top: 0; left: 0; right: 0;
     padding: calc(env(safe-area-inset-top) + 8px) 12px 8px; display: flex; gap: 8px; align-items: center;
     pointer-events: none; }
   .chip { pointer-events: auto; background: var(--panel); border-radius: 18px; padding: 6px 12px;
-    box-shadow: 0 1px 4px rgba(0,0,0,.25); font-size: 13px; font-weight: 600; white-space: nowrap; }
+    box-shadow: 0 1px 4px rgba(0,0,0,.3); font-size: 13px; font-weight: 700; white-space: nowrap; }
   .chip.title { color: var(--green); }
-  .chip.warn { background: #fff3e0; color: #a64b00; }
+  .chip.warn { background: #fff3e0; color: var(--amber); }
   .chip.good { color: var(--ok); }
   .spacer { flex: 1; }
 
-  .fabs { position: fixed; z-index: 1000; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 120px);
+  /* Large map controls, readable in sunlight */
+  .fabs { position: fixed; z-index: 1000; bottom: calc(var(--panel-h) + env(safe-area-inset-bottom) + 22px);
     display: flex; flex-direction: column; gap: 10px; }
-  .fab { width: 52px; height: 52px; border-radius: 50%; border: 0; background: var(--panel);
-    box-shadow: 0 2px 6px rgba(0,0,0,.3); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .fabs.right { right: 12px; }
+  .fabs.left { left: 12px; }
+  .fab { width: 54px; height: 54px; border-radius: 50%; border: 2px solid #222; background: var(--panel);
+    box-shadow: 0 2px 6px rgba(0,0,0,.35); display: grid; place-items: center; cursor: pointer; padding: 0; }
   .fab svg { width: 26px; height: 26px; }
-  .fab.active { background: var(--blue); }
+  .fab.active { background: var(--blue); border-color: var(--blue); }
   .fab.active svg { stroke: #fff; }
+  .fab.attn { box-shadow: 0 0 0 4px rgba(21,101,192,.45), 0 2px 6px rgba(0,0,0,.35); }
+  .fab.rec.on { background: var(--red); border-color: var(--red); animation: pulse 1.6s infinite; }
+  .fab.rec.on svg circle { fill: #fff; stroke: #fff; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 8px rgba(198,40,40,.25); } }
 
-  .panel { position: fixed; z-index: 1000; left: 10px; right: 10px;
-    bottom: calc(env(safe-area-inset-bottom) + 10px); background: var(--panel); border-radius: 14px;
-    box-shadow: 0 2px 10px rgba(0,0,0,.3); padding: 10px 14px; }
-  .row { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
-  .big { font-size: 20px; font-weight: 700; }
+  .panel { position: fixed; z-index: 1000; left: 8px; right: 8px;
+    bottom: calc(env(safe-area-inset-bottom) + 8px); background: var(--panel); border-radius: 14px;
+    border: 2px solid #222; box-shadow: 0 2px 10px rgba(0,0,0,.35); padding: 8px 12px; max-height: 60vh; overflow-y: auto; }
+  .row { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; flex-wrap: wrap; }
   .small { font-size: 13px; color: var(--muted); }
-  .course-status { font-weight: 700; }
+  .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+  .badge { display: inline-block; font-weight: 800; font-size: 15px; padding: 2px 8px; border-radius: 6px; border: 2px solid currentColor; }
+  .badge.ok { color: var(--ok); } .badge.warn { color: var(--amber); } .badge.bad { color: var(--red); } .badge.off { color: #444; }
+  .badges { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .stats { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 4px; font-weight: 700; font-size: 16px; }
+  .stats span small { font-weight: 500; color: var(--muted); font-size: 12px; display: block; }
+  .details { margin-top: 6px; border-top: 1px solid #ddd; padding-top: 6px; }
+  .section { border-top: 1px solid #ddd; margin-top: 8px; padding-top: 8px; }
+  .course-status { font-weight: 800; }
   .course-status.ok { color: var(--ok); }
   .course-status.off { color: var(--red); }
-  #courseInfo { border-top: 1px solid #e3e1da; margin-top: 8px; padding-top: 8px; }
+  .recbar { display: flex; align-items: center; gap: 8px; }
+  .recbar .what { flex: 1; font-weight: 800; }
+  .recbar .what.on { color: var(--red); }
+  .pill { border: 2px solid #222; background: #fff; color: #111; border-radius: 10px; padding: 8px 12px; font-weight: 700; cursor: pointer; }
+  .pill.danger { border-color: var(--red); color: var(--red); }
+  .linkbtn { background: none; border: 0; color: var(--blue); font-weight: 700; padding: 4px 0; cursor: pointer; }
 
   .sheet-bg { position: fixed; inset: 0; z-index: 2000; background: rgba(0,0,0,.35); display: none; }
-  .sheet { position: fixed; z-index: 2001; left: 0; right: 0; bottom: 0; max-height: 85vh; overflow-y: auto;
+  .sheet { position: fixed; z-index: 2001; left: 0; right: 0; bottom: 0; max-height: 88vh; overflow-y: auto;
     background: #fff; border-radius: 16px 16px 0 0; padding: 16px 16px calc(env(safe-area-inset-bottom) + 20px);
     transform: translateY(105%); transition: transform .2s ease; }
   .sheet.open { transform: none; }
   .sheet h2 { margin: 0 0 4px; font-size: 18px; color: var(--green); }
   .sheet h3 { margin: 18px 0 6px; font-size: 15px; }
   .btn { display: block; width: 100%; padding: 13px; border-radius: 10px; border: 0; margin: 8px 0;
-    font-size: 16px; font-weight: 600; background: var(--green); color: #fff; cursor: pointer; }
+    font-size: 16px; font-weight: 700; background: var(--green); color: #fff; cursor: pointer; }
   .btn.secondary { background: #eceae3; color: var(--text); }
+  .btn.danger { background: #fdecea; color: var(--red); }
   .btn:disabled { opacity: .6; }
   .progress { height: 8px; border-radius: 4px; background: #eceae3; overflow: hidden; margin: 6px 0; display: none; }
   .progress > div { height: 100%; width: 0; background: var(--green); transition: width .2s; }
-  label.toggle { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; }
+  label.toggle { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; gap: 12px; }
+  label.toggle input { width: 22px; height: 22px; flex: none; }
   .note { background: #fff8e1; border-radius: 10px; padding: 10px 12px; font-size: 13px; margin-top: 14px; }
   .credits { font-size: 11px; color: var(--muted); margin-top: 14px; }
+  .track { border: 1px solid #ddd; border-radius: 10px; padding: 8px 10px; margin: 8px 0; }
+  .track .acts { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
 
-  .banner { position: fixed; z-index: 1500; left: 50%; transform: translateX(-50%);
-    top: calc(env(safe-area-inset-top) + 52px); background: var(--green); color: #fff; padding: 8px 14px;
-    border-radius: 18px; font-size: 13px; font-weight: 600; display: none; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.3); }
+  .banner { position: fixed; z-index: 1500; left: 12px; right: 12px;
+    top: calc(env(safe-area-inset-top) + 52px); background: var(--green); color: #fff; padding: 10px 14px;
+    border-radius: 12px; font-size: 14px; font-weight: 700; display: none; box-shadow: 0 2px 6px rgba(0,0,0,.3); }
+  .banner .acts { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .toast { position: fixed; z-index: 2500; left: 50%; transform: translateX(-50%); top: calc(env(safe-area-inset-top) + 56px);
+    background: #222; color: #fff; padding: 10px 14px; border-radius: 10px; font-size: 14px; width: max-content; max-width: 90vw;
+    display: none; text-align: center; }
+  .debug { position: fixed; z-index: 1100; left: 8px; top: calc(env(safe-area-inset-top) + 82px); background: rgba(0,0,0,.78);
+    color: #9effa0; padding: 6px 8px; border-radius: 8px; font: 11px/1.35 ui-monospace, Menlo, Consolas, monospace;
+    white-space: pre; display: none; pointer-events: none; max-width: calc(100vw - 90px); overflow: hidden; }
+
+  /* Position marker: shape and text cues, not colour alone */
+  .me { position: relative; width: 0; height: 0; }
+  .me-dot { position: absolute; left: -10px; top: -10px; width: 20px; height: 20px; border-radius: 50%;
+    background: #1e88e5; border: 3px solid #fff; box-shadow: 0 0 0 1.5px #0d47a1, 0 1px 4px rgba(0,0,0,.5); }
+  .me-arrow { position: absolute; left: -30px; top: -30px; width: 60px; height: 60px; display: none; }
+  .me-arrow::before { content: ""; position: absolute; left: 50%; top: 0; transform: translateX(-50%);
+    border-left: 9px solid transparent; border-right: 9px solid transparent; border-bottom: 18px solid #0d47a1; }
+  .me.has-heading .me-arrow { display: block; }
+  .me-tag { position: absolute; left: 14px; top: -9px; font: 800 11px/1 sans-serif; background: #fff; color: #222;
+    border: 1.5px solid #222; border-radius: 4px; padding: 2px 3px; display: none; white-space: nowrap; }
+  .me.delayed .me-dot { background: #64b5f6; }
+  .me.stale .me-dot { background: #9e9e9e; border-style: dashed; box-shadow: 0 0 0 1.5px #424242; }
+  .me.stale .me-arrow { display: none; }
+  .me.stale .me-tag, .me.poor .me-tag { display: block; }
 
   /* Map labels */
   .lbl { white-space: nowrap; font-size: 11px; font-weight: 600; color: #3b2a1a;
@@ -93,23 +139,62 @@
   <div class="chip warn" id="offlineChip">Map not saved offline</div>
 </div>
 
-<div class="banner" id="updateBanner">New version ready. Tap to update</div>
+<div class="banner" id="updateBanner">New version ready. <button class="pill" id="updateBtn">Update now</button></div>
+<div class="banner" id="resumeBanner">
+  <div id="resumeText">An unfinished recording was found.</div>
+  <div class="acts"><button class="pill" id="resumeBtn">Resume recording</button><button class="pill" id="finishBtn">Finish and save</button></div>
+</div>
+<div class="toast" id="toast"></div>
+<div class="debug" id="debug"></div>
 
-<div class="fabs">
-  <button class="fab" id="menuBtn" aria-label="Menu">
-    <svg viewBox="0 0 24 24" fill="none" stroke="#1d1d1b" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+<div class="fabs left">
+  <button class="fab" id="zoomInBtn" aria-label="Zoom in">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
   </button>
-  <button class="fab" id="locateBtn" aria-label="Show my location">
-    <svg viewBox="0 0 24 24" fill="none" stroke="#1e88e5" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8"/></svg>
+  <button class="fab" id="zoomOutBtn" aria-label="Zoom out">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="2.5" stroke-linecap="round"><path d="M5 12h14"/></svg>
+  </button>
+</div>
+
+<div class="fabs right">
+  <button class="fab" id="menuBtn" aria-label="Menu">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+  </button>
+  <button class="fab" id="fitBtn" aria-label="Show whole map">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+  </button>
+  <button class="fab rec" id="recBtn" aria-label="Record run">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#c62828" stroke-width="2.2"><circle cx="12" cy="12" r="6" fill="#c62828"/><circle cx="12" cy="12" r="9.5"/></svg>
+  </button>
+  <button class="fab" id="locateBtn" aria-label="Centre on me">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#1565c0" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8"/></svg>
   </button>
 </div>
 
 <div class="panel" id="panel">
   <div class="row">
-    <div class="big" id="gpsMain">GPS off</div>
-    <div class="small" id="gpsSub">Tap the target button</div>
+    <div class="badges" id="gpsBadges"><span class="badge off">GPS off</span></div>
+    <button class="linkbtn" id="detailsBtn">Details ▾</button>
   </div>
-  <div id="courseInfo" hidden>
+  <div class="small" id="gpsHint">Tap the blue target button to show your position.</div>
+  <div class="stats" id="gpsStats" hidden>
+    <span><small>Altitude</small><b id="stAlt">-</b></span>
+    <span><small>Speed</small><b id="stSpeed">-</b></span>
+    <span><small>Heading</small><b id="stHeading">-</b></span>
+  </div>
+  <div class="mono" id="gpsCoords" hidden></div>
+  <div class="details small" id="gpsDetails" hidden></div>
+
+  <div class="section" id="recInfo" hidden>
+    <div class="recbar">
+      <div class="what" id="recWhat">● REC</div>
+      <button class="pill" id="pauseBtn">Pause</button>
+      <button class="pill danger" id="stopBtn">Stop</button>
+    </div>
+    <div class="small" id="recSub"></div>
+  </div>
+
+  <div class="section" id="courseInfo" hidden>
     <div class="row">
       <div class="course-status" id="courseStatus">-</div>
       <div class="small" id="courseDir"></div>
@@ -131,6 +216,12 @@
   <div class="small" id="dlText">Download the map once on wifi, then it works with no signal.</div>
   <div class="progress" id="dlProgress"><div></div></div>
   <button class="btn" id="dlBtn">Download map for offline</button>
+  <button class="btn danger" id="dlDelete" hidden>Delete offline map from this phone</button>
+  <div class="small" id="storageText"></div>
+
+  <h3>My recordings</h3>
+  <div class="small">Recording only runs while the app is open on screen. Turn on "Keep screen on" below for a continuous track.</div>
+  <div id="trackList"></div>
 
   <h3>Race course</h3>
   <div class="small" id="courseText">No course loaded. Load the GPX file of the route.</div>
@@ -141,8 +232,10 @@
   <h3>Settings</h3>
   <label class="toggle"><span>Show Turaco race map</span><input type="checkbox" id="raceToggle" checked></label>
   <label class="toggle"><span>Keep screen on</span><input type="checkbox" id="wakeToggle"></label>
+  <label class="toggle"><span>Use phone compass for heading when standing still</span><input type="checkbox" id="compassToggle"></label>
+  <label class="toggle"><span>Debug information</span><input type="checkbox" id="debugToggle"></label>
 
-  <div class="note"><b>Safety:</b> this is a navigation aid only. Follow the race markings and marshals, and carry the mandatory kit. Phones can run flat, get wet or lose GPS in deep valleys.</div>
+  <div class="note"><b>Safety:</b> this is a navigation aid only. GPS is never perfectly accurate: check the ± figure and the status badge. Follow the race markings and marshals, and carry the mandatory kit. This app cannot send messages or call for help. Phones can run flat, get wet or lose GPS in deep valleys.</div>
 
   <div class="credits">
     Race map: Wild Nyanga Map, The Turaco Trail © Far and Wide.

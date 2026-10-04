@@ -1,8 +1,8 @@
 // Offline worker. Bump SHELL on every release (match APP_VERSION in app.js);
 // that is what makes phones pick up new files. The tile cache is kept across
 // releases so runners don't have to download the map again.
-const SHELL = 'shell-v2';
-const TILES = 'tiles-v1';
+const SHELL = 'shell-v3';
+const TILES = 'tiles-v2';
 const CORE = [
   './', 'index.html', 'app.js', 'manifest.json', 'icon-192.png', 'icon-512.png',
   'vendor/leaflet.js', 'vendor/leaflet.css', 'data/osm.geojson', 'tiles/index.json', 'tiles-turaco/index.json',

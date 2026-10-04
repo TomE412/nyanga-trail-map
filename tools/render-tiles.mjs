@@ -115,6 +115,12 @@ for (let z = MIN_ZOOM; z <= MAX_ZOOM; z++) {
       ctx.stroke();
     }
     ctx.restore();
+    // Clear everything outside the map area, so the edges are clean.
+    const ex0 = (lon2x(BBOX.west, z) - tx) * 256, ex1 = (lon2x(BBOX.east, z) - tx) * 256;
+    const ey0 = (lat2y(BBOX.north, z) - ty) * 256, ey1 = (lat2y(BBOX.south, z) - ty) * 256;
+    ctx.globalCompositeOperation = 'destination-in';
+    ctx.fillRect(ex0, ey0, ex1 - ex0, ey1 - ey0);
+    ctx.globalCompositeOperation = 'source-over';
 
     mkdirSync(`tiles/${z}/${tx}`, { recursive: true });
     const buf = await canvas.encode('webp', 88);
