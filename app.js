@@ -1,19 +1,26 @@
 // Nyanga Trail Map: offline topo map with GPS position and race course.
 // Keep APP_VERSION in step with CACHE in sw.js.
-const APP_VERSION = 'v1 (4 Oct 2026)';
+const APP_VERSION = 'v2 (4 Oct 2026)';
 const TILE_CACHE = 'tiles-v1';
+// Bump when a tile set is added or redrawn, so phones know to download again.
+const TILES_TAG = 'contours1+turaco1';
+const TILE_SETS = ['tiles', 'tiles-turaco'];
 const BBOX = { west: 32.62, east: 32.98, south: -18.42, north: -18.08 };
+// Far and Wide "Turaco Trail" race map (from its GeoTIFF).
+const RACE_BBOX = { west: 32.770237886116384, east: 32.99270592722873, south: -18.476174967869852, north: -18.264234107572427 };
 
 const $ = id => document.getElementById(id);
 $('version').textContent = 'Version ' + APP_VERSION;
 
 // ---------- Map ----------
-const bounds = L.latLngBounds([BBOX.south, BBOX.west], [BBOX.north, BBOX.east]);
+const contourBounds = L.latLngBounds([BBOX.south, BBOX.west], [BBOX.north, BBOX.east]);
+const raceBounds = L.latLngBounds([RACE_BBOX.south, RACE_BBOX.west], [RACE_BBOX.north, RACE_BBOX.east]);
+const bounds = L.latLngBounds(contourBounds.getSouthWest(), contourBounds.getNorthEast()).extend(raceBounds);
 const map = L.map('map', {
-  preferCanvas: true, zoomControl: false, minZoom: 11, maxZoom: 17,
+  preferCanvas: true, zoomControl: false, minZoom: 11, maxZoom: 18,
   maxBounds: bounds.pad(0.3), maxBoundsViscosity: 0.8,
 });
-map.fitBounds(bounds);
+map.fitBounds(raceBounds);
 try {
   const v = JSON.parse(localStorage.getItem('view'));
   if (v) map.setView(v.c, v.z);
@@ -23,9 +30,13 @@ map.on('moveend', () => {
 });
 
 L.tileLayer('tiles/{z}/{x}/{y}.webp', {
-  minZoom: 11, maxZoom: 17, maxNativeZoom: 16, bounds,
+  minZoom: 11, maxZoom: 18, maxNativeZoom: 16, bounds: contourBounds,
   attribution: '© OpenStreetMap contributors · Copernicus DEM',
 }).addTo(map);
+const raceLayer = L.tileLayer('tiles-turaco/{z}/{x}/{y}.webp', {
+  minZoom: 11, maxZoom: 18, maxNativeZoom: 16, bounds: raceBounds,
+  attribution: 'Race map © Far and Wide',
+});
 L.control.scale({ imperial: false, position: 'topleft' }).addTo(map);
 // The GPS dot sits in its own layer above every label so it is never hidden.
 map.createPane('gps').style.zIndex = 650;
@@ -44,6 +55,18 @@ const STYLE = {
 const label = (text, cls) => L.divIcon({ className: '', html: `<div class="lbl ${cls}">${text}</div>`, iconSize: [0, 0] });
 const escapeHtml = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+// The race map already shows paths and names, so these only appear when it is off.
+const osmLayer = L.layerGroup();
+function setRaceMap(on) {
+  if (on) { raceLayer.addTo(map); osmLayer.remove(); } else { raceLayer.remove(); osmLayer.addTo(map); }
+  $('raceToggle').checked = on;
+  try { localStorage.setItem('raceMap', on ? '1' : '0'); } catch {}
+}
+let raceOn = true;
+try { raceOn = localStorage.getItem('raceMap') !== '0'; } catch {}
+setRaceMap(raceOn);
+$('raceToggle').onchange = e => setRaceMap(e.target.checked);
+
 fetch('data/osm.geojson').then(r => r.json()).then(gj => {
   const order = ['stream', 'river', 'road', 'track', 'path'];
   gj.features.sort((a, b) => order.indexOf(a.properties.kind) - order.indexOf(b.properties.kind));
@@ -51,24 +74,32 @@ fetch('data/osm.geojson').then(r => r.json()).then(gj => {
     filter: f => f.geometry.type === 'LineString',
     style: f => ({ opacity: 0.9, ...STYLE[f.properties.kind] }),
     interactive: false,
-  }).addTo(map);
+  }).addTo(osmLayer);
   for (const f of gj.features) {
     if (f.geometry.type !== 'Point' || !f.properties.name) continue;
     const { kind, name, ele } = f.properties;
     const [lon, lat] = f.geometry.coordinates;
     const text = escapeHtml(name) + (ele ? ` ${escapeHtml(ele)}m` : '');
-    L.marker([lat, lon], { icon: label(text, kind === 'peak' ? 'peak' : 'minor'), interactive: false }).addTo(map);
+    L.marker([lat, lon], { icon: label(text, kind === 'peak' ? 'peak' : 'minor'), interactive: false }).addTo(osmLayer);
   }
 }).catch(err => console.warn('Could not load paths', err));
 
 // ---------- Offline download ----------
-async function tileIndex() { return (await fetch('tiles/index.json')).json(); }
+async function allTileUrls() {
+  const urls = []; let bytes = 0;
+  for (const dir of TILE_SETS) {
+    const idx = await (await fetchWithTimeout(`${dir}/index.json`, 15000)).json();
+    idx.tiles.forEach(t => urls.push(`${dir}/${t}.webp`));
+    bytes += idx.bytes;
+  }
+  return { urls, bytes };
+}
 
 async function refreshOfflineStatus() {
   const chip = $('offlineChip');
   try {
     const saved = localStorage.getItem('tilesSaved');
-    if (saved === TILE_CACHE) {
+    if (saved === TILES_TAG) {
       chip.textContent = 'Saved offline ✓'; chip.className = 'chip good';
       $('dlText').textContent = 'The map is saved on this phone. It works with no signal.';
       $('dlBtn').textContent = 'Check / re-download map';
@@ -83,11 +114,10 @@ $('dlBtn').onclick = async () => {
   btn.disabled = true; bar.style.display = 'block';
   try {
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
-    const idx = await tileIndex();
+    const { urls, bytes } = await allTileUrls();
     const cache = await caches.open(TILE_CACHE);
-    const urls = idx.tiles.map(t => `tiles/${t}.webp`);
     let done = 0, failed = 0, next = 0;
-    const mb = (idx.bytes / 1e6).toFixed(0);
+    const mb = (bytes / 1e6).toFixed(0);
     async function worker() {
       while (next < urls.length) {
         const url = urls[next++];
@@ -109,7 +139,7 @@ $('dlBtn').onclick = async () => {
     if (failed) {
       text.textContent = `${failed} pieces did not download. Check your connection and tap the button again; it carries on where it stopped.`;
     } else {
-      localStorage.setItem('tilesSaved', TILE_CACHE);
+      localStorage.setItem('tilesSaved', TILES_TAG);
       text.textContent = 'Done. The map is saved on this phone.';
     }
   } catch (err) {

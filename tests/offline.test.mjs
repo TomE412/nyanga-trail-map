@@ -52,7 +52,7 @@ const tilesOk = await page.evaluate(() => [...document.querySelectorAll('.leafle
 check('Offline reload shows map tiles', tilesOk > 4, `${tilesOk} tiles drawn`);
 check('Offline: course still loaded', (await text('courseStatus')).length > 1, await text('courseStatus'));
 check('Offline: saved chip', (await text('offlineChip')).includes('Saved'), await text('offlineChip'));
-await page.evaluate(() => { map.setView([-18.30137, 32.84191], 17); });
+await page.evaluate(() => { map.setView([-18.395, 32.835], 17); });
 await page.waitForTimeout(1500);
 const broken = await page.evaluate(() => [...document.querySelectorAll('.leaflet-tile')].filter(i => i.complete && i.naturalWidth === 0).length);
 check('Offline zoomed-in tiles all present', broken === 0, `${broken} missing`);

@@ -5,7 +5,7 @@ contour lines, paths and your GPS position with no phone signal, and can load a
 race course (GPX file) to show distance done, distance to go and an off-course warning.
 
 ## How runners use it
-1. Open the site on wifi and tap **☰ → Download map for offline** (about 33 MB).
+1. Open the site on wifi and tap **☰ → Download map for offline** (about 55 MB).
 2. Optionally load the course with **Load course (GPX file)**.
 3. Add it to the home screen. It then works in airplane mode.
 
