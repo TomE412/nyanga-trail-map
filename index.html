@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Nyanga Trail Map</title>
+<meta name="theme-color" content="#1f4d3a">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="vendor/leaflet.css">
+<style>
+  :root {
+    --green: #1f4d3a; --blue: #1e88e5; --red: #d32f2f; --ok: #2e7d32;
+    --panel: rgba(255,255,255,0.96); --text: #1d1d1b; --muted: #6b6b66;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #e9e6dc; color: var(--text);
+    font: 15px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-tap-highlight-color: transparent; overscroll-behavior: none; }
+  #map { position: fixed; inset: 0; background: #e9e6dc; }
+
+  .topbar { position: fixed; z-index: 1000; top: 0; left: 0; right: 0;
+    padding: calc(env(safe-area-inset-top) + 8px) 12px 8px; display: flex; gap: 8px; align-items: center;
+    pointer-events: none; }
+  .chip { pointer-events: auto; background: var(--panel); border-radius: 18px; padding: 6px 12px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.25); font-size: 13px; font-weight: 600; white-space: nowrap; }
+  .chip.title { color: var(--green); }
+  .chip.warn { background: #fff3e0; color: #a64b00; }
+  .chip.good { color: var(--ok); }
+  .spacer { flex: 1; }
+
+  .fabs { position: fixed; z-index: 1000; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 120px);
+    display: flex; flex-direction: column; gap: 10px; }
+  .fab { width: 52px; height: 52px; border-radius: 50%; border: 0; background: var(--panel);
+    box-shadow: 0 2px 6px rgba(0,0,0,.3); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .fab svg { width: 26px; height: 26px; }
+  .fab.active { background: var(--blue); }
+  .fab.active svg { stroke: #fff; }
+
+  .panel { position: fixed; z-index: 1000; left: 10px; right: 10px;
+    bottom: calc(env(safe-area-inset-bottom) + 10px); background: var(--panel); border-radius: 14px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.3); padding: 10px 14px; }
+  .row { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+  .big { font-size: 20px; font-weight: 700; }
+  .small { font-size: 13px; color: var(--muted); }
+  .course-status { font-weight: 700; }
+  .course-status.ok { color: var(--ok); }
+  .course-status.off { color: var(--red); }
+  #courseInfo { border-top: 1px solid #e3e1da; margin-top: 8px; padding-top: 8px; }
+
+  .sheet-bg { position: fixed; inset: 0; z-index: 2000; background: rgba(0,0,0,.35); display: none; }
+  .sheet { position: fixed; z-index: 2001; left: 0; right: 0; bottom: 0; max-height: 85vh; overflow-y: auto;
+    background: #fff; border-radius: 16px 16px 0 0; padding: 16px 16px calc(env(safe-area-inset-bottom) + 20px);
+    transform: translateY(105%); transition: transform .2s ease; }
+  .sheet.open { transform: none; }
+  .sheet h2 { margin: 0 0 4px; font-size: 18px; color: var(--green); }
+  .sheet h3 { margin: 18px 0 6px; font-size: 15px; }
+  .btn { display: block; width: 100%; padding: 13px; border-radius: 10px; border: 0; margin: 8px 0;
+    font-size: 16px; font-weight: 600; background: var(--green); color: #fff; cursor: pointer; }
+  .btn.secondary { background: #eceae3; color: var(--text); }
+  .btn:disabled { opacity: .6; }
+  .progress { height: 8px; border-radius: 4px; background: #eceae3; overflow: hidden; margin: 6px 0; display: none; }
+  .progress > div { height: 100%; width: 0; background: var(--green); transition: width .2s; }
+  label.toggle { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; }
+  .note { background: #fff8e1; border-radius: 10px; padding: 10px 12px; font-size: 13px; margin-top: 14px; }
+  .credits { font-size: 11px; color: var(--muted); margin-top: 14px; }
+
+  .banner { position: fixed; z-index: 1500; left: 50%; transform: translateX(-50%);
+    top: calc(env(safe-area-inset-top) + 52px); background: var(--green); color: #fff; padding: 8px 14px;
+    border-radius: 18px; font-size: 13px; font-weight: 600; display: none; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.3); }
+
+  /* Map labels */
+  .lbl { white-space: nowrap; font-size: 11px; font-weight: 600; color: #3b2a1a;
+    text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 3px #fff; transform: translate(-50%, -50%); position: absolute; }
+  .lbl.peak { font-size: 12px; }
+  .lbl.peak::before { content: "▲ "; color: #5d4037; }
+  .lbl.km { font-size: 10px; color: #fff; background: #e65100; border-radius: 8px; padding: 0 4px; text-shadow: none; }
+  .lbl.wpt { font-size: 11px; color: #fff; background: #6a1b9a; border-radius: 8px; padding: 1px 6px; text-shadow: none; }
+  .zoom-lo .lbl.minor, .zoom-lo .lbl.km { display: none; }
+  .leaflet-control-attribution { font-size: 9px; }
+  .leaflet-top.leaflet-left { top: calc(env(safe-area-inset-top) + 50px); }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="topbar">
+  <div class="chip title">Nyanga Trail Map</div>
+  <div class="spacer"></div>
+  <div class="chip warn" id="offlineChip">Map not saved offline</div>
+</div>
+
+<div class="banner" id="updateBanner">New version ready. Tap to update</div>
+
+<div class="fabs">
+  <button class="fab" id="menuBtn" aria-label="Menu">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#1d1d1b" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+  </button>
+  <button class="fab" id="locateBtn" aria-label="Show my location">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#1e88e5" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8"/></svg>
+  </button>
+</div>
+
+<div class="panel" id="panel">
+  <div class="row">
+    <div class="big" id="gpsMain">GPS off</div>
+    <div class="small" id="gpsSub">Tap the target button</div>
+  </div>
+  <div id="courseInfo" hidden>
+    <div class="row">
+      <div class="course-status" id="courseStatus">-</div>
+      <div class="small" id="courseDir"></div>
+    </div>
+    <div class="row small">
+      <div id="courseDone"></div>
+      <div id="courseLeft"></div>
+    </div>
+    <div class="small" id="courseNext"></div>
+  </div>
+</div>
+
+<div class="sheet-bg" id="sheetBg"></div>
+<div class="sheet" id="sheet">
+  <h2>Nyanga Trail Map</h2>
+  <div class="small" id="version"></div>
+
+  <h3>Offline map</h3>
+  <div class="small" id="dlText">Download the map once on wifi, then it works with no signal.</div>
+  <div class="progress" id="dlProgress"><div></div></div>
+  <button class="btn" id="dlBtn">Download map for offline</button>
+
+  <h3>Race course</h3>
+  <div class="small" id="courseText">No course loaded. Load the GPX file of the route.</div>
+  <input type="file" id="gpxInput" accept=".gpx,application/gpx+xml,application/xml,text/xml" hidden>
+  <button class="btn secondary" id="gpxBtn">Load course (GPX file)</button>
+  <button class="btn secondary" id="gpxClear" hidden>Remove course</button>
+
+  <h3>Settings</h3>
+  <label class="toggle"><span>Keep screen on</span><input type="checkbox" id="wakeToggle"></label>
+
+  <div class="note"><b>Safety:</b> this is a navigation aid only. Follow the race markings and marshals, and carry the mandatory kit. Phones can run flat, get wet or lose GPS in deep valleys.</div>
+
+  <div class="credits">
+    Elevation: Copernicus DEM GLO-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018, provided under COPERNICUS by the European Union and ESA.
+    Paths and names: © OpenStreetMap contributors (ODbL). Map library: Leaflet.
+  </div>
+  <button class="btn secondary" id="closeSheet">Close</button>
+</div>
+
+<script src="vendor/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "name": "nyanga-trail-map",
+  "version": "1.0.0",
+  "description": "Offline topo map with GPS for trail running in Nyanga, Zimbabwe",
+  "scripts": {
+    "test": "node tests/offline.test.mjs",
+    "serve": "node tools/serve.mjs",
+    "osm": "node tools/fetch-osm.mjs",
+    "tiles": "node tools/render-tiles.mjs"
+  },
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@napi-rs/canvas": "^1.0.10",
+    "d3-contour": "^4.0.2",
+    "geotiff": "^3.0.5",
+    "leaflet": "^1.9.4",
+    "playwright": "^1.63.0"
+  },
+  "private": true
+}
