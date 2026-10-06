@@ -75,30 +75,41 @@ function distanceToRoute(pts, lat, lon) {
 const index = [];
 for (const race of races) {
   const xml = readFileSync(`races/${race.file}`, 'utf8');
-  let pts = [...xml.matchAll(/<trkpt\s[^>]*?lat="([-\d.]+)"[^>]*?lon="([-\d.]+)"[^>]*>([\s\S]*?)<\/trkpt>/g)]
+  const read = (s, el) => [...s.matchAll(new RegExp(`<${el}\\s[^>]*?lat="([-\\d.]+)"[^>]*?lon="([-\\d.]+)"[^>]*>([\\s\\S]*?)</${el}>`, 'g'))]
     .map(m => [+m[1], +m[2], tag(m[3], 'ele') !== null ? +tag(m[3], 'ele') : null]);
-  if (pts.length < 2) pts = [...xml.matchAll(/<rtept\s[^>]*?lat="([-\d.]+)"[^>]*?lon="([-\d.]+)"[^>]*>([\s\S]*?)<\/rtept>/g)]
-    .map(m => [+m[1], +m[2], tag(m[3], 'ele') !== null ? +tag(m[3], 'ele') : null]);
-  if (pts.length < 2) throw new Error(`${race.file}: no route found`);
+  // Each <trk> is one stage (a multi-day race has one per day).
+  let tracks = [...xml.matchAll(/<trk>[\s\S]*?<\/trk>/g)].map(t => read(t[0], 'trkpt')).filter(p => p.length >= 2);
+  if (!tracks.length) tracks = [read(xml, 'rtept')].filter(p => p.length >= 2);
+  if (!tracks.length) throw new Error(`${race.file}: no route found`);
+  const stageInfo = race.stages || [{ name: race.name, short: '' }];
+  if (tracks.length !== stageInfo.length) {
+    throw new Error(`${race.file} has ${tracks.length} routes in it; list ${tracks.length} "stages" for ${race.id} in races/races.json`);
+  }
 
-  const heightsMissing = pts.some(p => p[2] === null) || pts.every(p => p[2] === 0);
-  if (heightsMissing) pts = pts.map(([lat, lon]) => [lat, lon, elevation(lat, lon)]);
-  pts = pts.map(([lat, lon, ele]) => [+lat.toFixed(6), +lon.toFixed(6), ele == null ? null : Math.round(ele)]);
+  let heightsFilled = false;
+  const stages = tracks.map((raw, s) => {
+    let pts = raw;
+    if (pts.some(p => p[2] === null) || pts.every(p => p[2] === 0)) { pts = pts.map(([lat, lon]) => [lat, lon, elevation(lat, lon)]); heightsFilled = true; }
+    pts = pts.map(([lat, lon, ele]) => [+lat.toFixed(6), +lon.toFixed(6), ele == null ? null : Math.round(ele)]);
+    let dist = 0, climb = 0, ref = pts[0][2];
+    for (let i = 1; i < pts.length; i++) {
+      dist += metres(pts[i - 1], pts[i]);
+      const e = pts[i][2];
+      if (e != null && ref != null) { if (e - ref >= 5) { climb += e - ref; ref = e; } else if (e < ref) ref = e; }
+    }
+    return { name: stageInfo[s].name, short: stageInfo[s].short || '', pts, distanceKm: +(dist / 1000).toFixed(1), climbM: Math.round(climb) };
+  });
 
-  const wpts = allCheckpoints.filter(c => c.race === race.id || distanceToRoute(pts, c.lat, c.lon) <= 100)
+  const wpts = allCheckpoints.filter(c => c.race === race.id || stages.some(st => distanceToRoute(st.pts, c.lat, c.lon) <= 100))
     .map(({ lat, lon, name, kind }) => ({ lat, lon, name, kind }));
 
-  let dist = 0, climb = 0, ref = pts[0][2];
-  for (let i = 1; i < pts.length; i++) {
-    dist += metres(pts[i - 1], pts[i]);
-    const e = pts[i][2];
-    if (e != null && ref != null) { if (e - ref >= 5) { climb += e - ref; ref = e; } else if (e < ref) ref = e; }
-  }
-  const out = { id: race.id, name: race.name, version: race.version, pts, wpts };
+  const out = { id: race.id, name: race.name, version: race.version, stages: stages.map(({ name, short, pts }) => ({ name, short, pts })), wpts };
   writeFileSync(`data/races/${race.id}.json`, JSON.stringify(out));
-  index.push({ id: race.id, name: race.name, version: race.version, start: race.start || '',
-    distanceKm: +(dist / 1000).toFixed(1), climbM: Math.round(climb), checkpoints: wpts.length, file: `data/races/${race.id}.json` });
-  console.log(`${race.name}: ${(dist / 1000).toFixed(1)} km, ${Math.round(climb)} m climb, ${pts.length} points, ` +
-    `${wpts.length} checkpoints${heightsMissing ? ' (heights from elevation data)' : ''}`);
+  const distanceKm = +stages.reduce((s, st) => s + st.distanceKm, 0).toFixed(1), climbM = stages.reduce((s, st) => s + st.climbM, 0);
+  index.push({ id: race.id, name: race.name, version: race.version, start: race.start || '', distanceKm, climbM,
+    checkpoints: wpts.length, file: `data/races/${race.id}.json`,
+    stages: stages.length > 1 ? stages.map(({ name, short, distanceKm, climbM }) => ({ name, short, distanceKm, climbM })) : undefined });
+  console.log(`${race.name}: ${distanceKm} km, ${climbM} m climb, ${stages.length} stage(s) ` +
+    `[${stages.map(st => `${st.name} ${st.distanceKm} km`).join('; ')}], ${wpts.length} checkpoints${heightsFilled ? ' (heights from elevation data)' : ''}`);
 }
 writeFileSync('data/races/index.json', JSON.stringify(index, null, 1));

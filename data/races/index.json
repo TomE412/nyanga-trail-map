@@ -10,6 +10,16 @@
   "file": "data/races/the-challenge.json"
  },
  {
+  "id": "mutarazi-traverse",
+  "name": "The Mutarazi Traverse",
+  "version": 1,
+  "start": "",
+  "distanceKm": 29.6,
+  "climbM": 2029,
+  "checkpoints": 0,
+  "file": "data/races/mutarazi-traverse.json"
+ },
+ {
   "id": "the-ultra",
   "name": "The Ultra",
   "version": 1,
@@ -18,6 +28,30 @@
   "climbM": 3052,
   "checkpoints": 21,
   "file": "data/races/the-ultra.json"
+ },
+ {
+  "id": "back2back",
+  "name": "Back2Back",
+  "version": 1,
+  "start": "",
+  "distanceKm": 58.2,
+  "climbM": 3414,
+  "checkpoints": 9,
+  "file": "data/races/back2back.json",
+  "stages": [
+   {
+    "name": "Day 1: The Mutarazi Traverse",
+    "short": "Day 1",
+    "distanceKm": 29.6,
+    "climbM": 2021
+   },
+   {
+    "name": "Day 2: The Challenge",
+    "short": "Day 2",
+    "distanceKm": 28.6,
+    "climbM": 1393
+   }
+  ]
  },
  {
   "id": "the-epic",

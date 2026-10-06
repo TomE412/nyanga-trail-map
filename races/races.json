@@ -8,12 +8,32 @@
     "notes": "From The Challenge 2026.gpx. Starts at Golden Pools, finishes in the east (same finish as the other races)."
   },
   {
+    "id": "mutarazi-traverse",
+    "name": "The Mutarazi Traverse",
+    "file": "mutarazi-traverse.gpx",
+    "version": 1,
+    "start": "",
+    "notes": "From The Mutarazi Traverse 2026.gpx. Loop from the southern start past Mutarazi Falls to the Ringing Rocks and back."
+  },
+  {
     "id": "the-ultra",
     "name": "The Ultra",
     "file": "the-ultra.gpx",
     "version": 1,
     "start": "",
     "notes": "From Ultra 2026.gpx. Starts in the south, north to Golden Pools, then the Challenge route to the finish. The file's water points and stations are the checkpoints."
+  },
+  {
+    "id": "back2back",
+    "name": "Back2Back",
+    "file": "back2back.gpx",
+    "version": 1,
+    "start": "",
+    "stages": [
+      { "name": "Day 1: The Mutarazi Traverse", "short": "Day 1" },
+      { "name": "Day 2: The Challenge", "short": "Day 2" }
+    ],
+    "notes": "From Back2Back 2026.gpx, which holds two routes: the Mutarazi Traverse loop, then the Challenge. Day order taken from the file."
   },
   {
     "id": "the-epic",

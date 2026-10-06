@@ -1,6 +1,6 @@
 // Nyanga Trail Map: offline race map with live GPS, run recording and course.
 // Keep APP_VERSION in step with SHELL in sw.js.
-const APP_VERSION = 'v8 (6 Oct 2026)';
+const APP_VERSION = 'v9 (6 Oct 2026)';
 const TILE_CACHE = 'tiles-v2';
 // Bump when a tile set is added or redrawn, so phones know to download again.
 const TILES_TAG = 'turaco2026';
@@ -734,45 +734,55 @@ function renderRaceInfo() {
   const rows = [
     ['Name', profile.name || '-'],
     ['Bib number', profile.bib || '-'],
-    ['Race', info ? `${info.name}, ${info.distanceKm} km, ${info.climbM} m climb` : 'Not chosen'],
+    ['Race', info ? `${info.name}, ${info.stages ? info.stages.length + ' days, ' : ''}${info.distanceKm} km, ${info.climbM} m climb` : 'Not chosen'],
     ['Route version', info ? String(info.version) : '-'],
   ];
   $('raceText').innerHTML = rows.map(([k, v]) => `<div class="row"><span>${escapeHtml(k)}</span><b>${escapeHtml(v)}</b></div>`).join('');
 }
 
-function prepareCourse(c) {
-  const xy = c.pts.map(([lat, lon]) => [lon * KX, lat * KY]);
+// A race has one or more stages (one per day for multi-day races). Each stage
+// is followed separately; nothing is drawn or measured between stages.
+function prepareStage(st) {
+  const xy = st.pts.map(([lat, lon]) => [lon * KX, lat * KY]);
   const cum = [0];
   for (let i = 1; i < xy.length; i++) cum.push(cum[i - 1] + Math.hypot(xy[i][0] - xy[i - 1][0], xy[i][1] - xy[i - 1][1]));
-  // Climb still to come from each point to the finish. Height changes under
-  // 5 m are ignored so small wobbles in the route's heights don't inflate it.
-  const climbLeft = new Array(c.pts.length).fill(0);
-  const hasEle = c.pts.every(p => p[2] != null);
+  // Climb still to come from each point to the end of the stage. Height
+  // changes under 5 m are ignored so small wobbles don't inflate it.
+  const climbLeft = new Array(st.pts.length).fill(0);
+  const hasEle = st.pts.every(p => p[2] != null);
   if (hasEle) {
-    let ref = c.pts[c.pts.length - 1][2], acc = 0;
-    for (let i = c.pts.length - 2; i >= 0; i--) {
-      const e = c.pts[i][2];
+    let ref = st.pts[st.pts.length - 1][2], acc = 0;
+    for (let i = st.pts.length - 2; i >= 0; i--) {
+      const e = st.pts[i][2];
       if (ref - e >= 5) { acc += ref - e; ref = e; } else if (e > ref) ref = e;
       climbLeft[i] = acc;
     }
   }
-  const prepared = { ...c, xy, cum, total: cum[cum.length - 1], climbLeft, hasEle };
-  prepared.wpts = (c.wpts || []).map(w => ({ ...w, along: nearestOnCourse(prepared, w.lat, w.lon).along }))
-    .sort((a, b) => a.along - b.along);
-  return prepared;
+  return { ...st, xy, cum, total: cum[cum.length - 1], climbLeft, hasEle };
 }
 
-// Finds the closest point on the route. Where the route passes the same
-// spot twice, prefer the pass closest to where the runner was last seen.
-function nearestOnCourse(c, lat, lon, prevAlong = null) {
+function prepareCourse(c) {
+  const stages = (c.stages || [{ name: c.name, short: '', pts: c.pts }]).map(prepareStage);
+  // Each checkpoint belongs to the stage it is closest to.
+  const wpts = (c.wpts || []).map(w => {
+    const near = stages.map(st => nearestOnCourse(st, w.lat, w.lon));
+    const s = near.reduce((b, n, k) => (n.d < near[b].d ? k : b), 0);
+    return { ...w, stage: s, along: near[s].along };
+  }).sort((a, b) => a.stage - b.stage || a.along - b.along);
+  return { ...c, stages, wpts, pts: stages.flatMap(st => st.pts) };
+}
+
+// Finds the closest point on a stage. Where the route passes the same spot
+// twice, prefer the pass closest to where the runner was last seen.
+function nearestOnCourse(st, lat, lon, prevAlong = null) {
   const px = lon * KX, py = lat * KY;
   const hits = [];
-  for (let i = 0; i < c.xy.length - 1; i++) {
-    const [ax, ay] = c.xy[i], [bx, by] = c.xy[i + 1];
+  for (let i = 0; i < st.xy.length - 1; i++) {
+    const [ax, ay] = st.xy[i], [bx, by] = st.xy[i + 1];
     const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
     const t = len2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2)) : 0;
     const qx = ax + t * dx, qy = ay + t * dy;
-    hits.push({ i, t, d: Math.hypot(px - qx, py - qy), along: c.cum[i] + t * Math.sqrt(len2), qx, qy });
+    hits.push({ i, t, d: Math.hypot(px - qx, py - qy), along: st.cum[i] + t * Math.sqrt(len2), qx, qy });
   }
   let best = hits.reduce((a, b) => (b.d < a.d ? b : a));
   if (prevAlong != null) {
@@ -786,37 +796,44 @@ function nearestOnCourse(c, lat, lon, prevAlong = null) {
 const km = m => (m / 1000).toFixed(m < 10000 ? 2 : 1) + ' km';
 const CHECKPOINT_ICON = { water: '💧', station: '★', point: '◆' };
 
-// A point (and the direction of travel there) a given distance along the route.
-function alongPoint(dist) {
+// A point (and the direction of travel there) a given distance along a stage.
+function alongPoint(st, dist) {
   let i = 0;
-  while (i < course.cum.length - 2 && course.cum[i + 1] < dist) i++;
-  const seg = course.cum[i + 1] - course.cum[i], t = seg ? (dist - course.cum[i]) / seg : 0;
-  const [a, b] = [course.pts[i], course.pts[i + 1]];
-  const bearing = (Math.atan2(course.xy[i + 1][0] - course.xy[i][0], course.xy[i + 1][1] - course.xy[i][1]) * 180 / Math.PI + 360) % 360;
+  while (i < st.cum.length - 2 && st.cum[i + 1] < dist) i++;
+  const seg = st.cum[i + 1] - st.cum[i], t = seg ? (dist - st.cum[i]) / seg : 0;
+  const [a, b] = [st.pts[i], st.pts[i + 1]];
+  const bearing = (Math.atan2(st.xy[i + 1][0] - st.xy[i][0], st.xy[i + 1][1] - st.xy[i][1]) * 180 / Math.PI + 360) % 360;
   return { lat: a[0] + t * (b[0] - a[0]), lon: a[1] + t * (b[1] - a[1]), bearing };
 }
 
 function drawCourse() {
   if (courseLayer) courseLayer.remove();
   if (!course) return;
-  const ll = course.pts.map(p => [p[0], p[1]]);
-  courseLayer = L.layerGroup([
-    L.polyline(ll, { color: '#fff', weight: 7, opacity: 0.9, interactive: false }),
-    L.polyline(ll, { color: '#e65100', weight: 4, interactive: false }),
-  ]);
-  // Direction arrows every 400 m, so loops and out-and-backs are clear.
-  for (let d = 200; d < course.total; d += 400) {
-    if (d % 1000 < 150 || d % 1000 > 850) continue; // keep clear of km markers
-    const p = alongPoint(d);
-    courseLayer.addLayer(L.marker([p.lat, p.lon], { interactive: false, icon: L.divIcon({ className: '', iconSize: [0, 0],
-      html: `<div class="lbl arrow" style="transform: translate(-50%, -50%) rotate(${p.bearing.toFixed(0)}deg)">▲</div>` }) }));
+  courseLayer = L.layerGroup();
+  for (const st of course.stages) {
+    const ll = st.pts.map(p => [p[0], p[1]]);
+    courseLayer.addLayer(L.polyline(ll, { color: '#fff', weight: 7, opacity: 0.9, interactive: false }));
+    courseLayer.addLayer(L.polyline(ll, { color: '#e65100', weight: 4, interactive: false }));
+    // Direction arrows every 400 m, so loops and out-and-backs are clear.
+    for (let d = 200; d < st.total; d += 400) {
+      if (d % 1000 < 150 || d % 1000 > 850) continue; // keep clear of km markers
+      const p = alongPoint(st, d);
+      courseLayer.addLayer(L.marker([p.lat, p.lon], { interactive: false, icon: L.divIcon({ className: '', iconSize: [0, 0],
+        html: `<div class="lbl arrow" style="transform: translate(-50%, -50%) rotate(${p.bearing.toFixed(0)}deg)">▲</div>` }) }));
+    }
+    for (let k = 1000; k < st.total; k += 1000) {
+      const p = alongPoint(st, k);
+      courseLayer.addLayer(L.marker([p.lat, p.lon], { icon: label(String(k / 1000), 'km'), interactive: false }));
+    }
+    // Loops start and finish in the same place, so they get one label.
+    const prefix = st.short ? escapeHtml(st.short) + ' ' : '';
+    const isLoop = map.distance(ll[0], ll[ll.length - 1]) < 150;
+    if (isLoop) courseLayer.addLayer(L.marker(ll[0], { icon: label(prefix + 'START / FINISH', 'wpt'), interactive: false }));
+    else {
+      courseLayer.addLayer(L.marker(ll[0], { icon: label(prefix + 'START', 'wpt'), interactive: false }));
+      courseLayer.addLayer(L.marker(ll[ll.length - 1], { icon: label(prefix + 'FINISH', 'wpt'), interactive: false }));
+    }
   }
-  for (let k = 1000; k < course.total; k += 1000) {
-    const p = alongPoint(k);
-    courseLayer.addLayer(L.marker([p.lat, p.lon], { icon: label(String(k / 1000), 'km'), interactive: false }));
-  }
-  courseLayer.addLayer(L.marker(ll[0], { icon: label('START', 'wpt'), interactive: false }));
-  courseLayer.addLayer(L.marker(ll[ll.length - 1], { icon: label('FINISH', 'wpt'), interactive: false }));
   for (const w of course.wpts) {
     const html = `<span class="ico">${CHECKPOINT_ICON[w.kind] || '◆'}</span><span class="nm"> ${escapeHtml(w.name)}</span>`;
     courseLayer.addLayer(L.marker([w.lat, w.lon], { icon: label(html, 'wpt cp-' + (w.kind || 'point')), interactive: false }));
@@ -828,26 +845,33 @@ function drawCourse() {
 
 function updateCourse() {
   if (!course) return;
-  const f = gps.fix;
+  const f = gps.fix, multi = course.stages.length > 1;
   if (!f) {
-    $('courseStatus').textContent = course.info ? course.info.name : 'Route loaded'; $('courseStatus').className = 'course-status';
-    $('courseDone').textContent = `Total ${course.info ? course.info.distanceKm + ' km' : km(course.total)}`;
-    $('courseLeft').textContent = course.hasEle ? `${Math.round(course.climbLeft[0])} m climb` : '';
+    const info = course.info;
+    $('courseStatus').textContent = info ? info.name : 'Route loaded'; $('courseStatus').className = 'course-status';
+    $('courseDone').textContent = info ? `${multi ? course.stages.length + ' days · ' : 'Total '}${info.distanceKm} km` : '';
+    $('courseLeft').textContent = info ? `${info.climbM} m climb` : '';
     $('courseDir').textContent = ''; $('courseNext').textContent = '';
     return;
   }
-  const n = nearestOnCourse(course, f.lat, f.lon, lastAlong);
+  // Find the stage the runner is on: the nearest one, but stay on the last
+  // stage they were following unless another is clearly closer.
+  const near = course.stages.map((st, s) => nearestOnCourse(st, f.lat, f.lon, lastAlong && lastAlong.s === s ? lastAlong.along : null));
+  let s = near.reduce((b, n, k) => (n.d < near[b].d ? k : b), 0);
+  if (lastAlong && near[lastAlong.s].d <= near[s].d + 40) s = lastAlong.s;
+  const st = course.stages[s], n = near[s];
   const tolerance = Math.max(40, f.acc + 15);
   const onCourse = n.d <= tolerance;
-  if (onCourse) lastAlong = n.along;
-  const st = $('courseStatus');
-  st.textContent = onCourse ? '✓ On your route' : `⚠ ${Math.round(n.d)} m off your route`;
-  st.className = 'course-status ' + (onCourse ? 'ok' : 'off');
+  if (onCourse) lastAlong = { s, along: n.along };
+  const prefix = multi ? `${st.short}: ` : '';
+  const el = $('courseStatus');
+  el.textContent = onCourse ? '✓ On your route' : `⚠ ${Math.round(n.d)} m off your route`;
+  el.className = 'course-status ' + (onCourse ? 'ok' : 'off');
   $('courseDir').textContent = onCourse ? '' : `Your route is ${compassPoint(n.bearing)} of you`;
-  $('courseDone').textContent = `${km(n.along)} done`;
-  const climb = course.hasEle ? ` · ${Math.round(course.climbLeft[n.i])} m climb left` : '';
-  $('courseLeft').textContent = `${km(course.total - n.along)} to go${climb}`;
-  const next = course.wpts.find(w => w.along > n.along + 20);
+  $('courseDone').textContent = `${prefix}${km(n.along)} done`;
+  const climb = st.hasEle ? ` · ${Math.round(st.climbLeft[n.i])} m climb left` : '';
+  $('courseLeft').textContent = `${km(st.total - n.along)} to go${climb}`;
+  const next = course.wpts.find(w => w.stage === s && w.along > n.along + 20);
   $('courseNext').textContent = next ? `Next: ${CHECKPOINT_ICON[next.kind] || '◆'} ${next.name} in ${km(next.along - n.along)}` : '';
 }
 
@@ -930,8 +954,9 @@ const setup = {
     let list;
     try { list = await loadRaceList(); }
     catch (err) { $('raceCards').textContent = 'Could not load the races: ' + (err.message || err) + '. Connect to the internet and try again.'; return; }
+    const days = r => (r.stages ? `<span class="days">${r.stages.map(s => `${escapeHtml(s.name)}: ${s.distanceKm} km`).join('<br>')}</span>` : '');
     const card = r => `<button class="racecard${this.picked === r.id ? ' picked' : ''}" data-id="${escapeHtml(r.id)}">
-      <b>${escapeHtml(r.name)}</b><span>${r.distanceKm} km · ${r.climbM} m climb${r.start ? ' · start ' + escapeHtml(r.start) : ''}${r.checkpoints ? ` · ${r.checkpoints} checkpoints` : ''}</span></button>`;
+      <b>${escapeHtml(r.name)}</b><span>${r.stages ? r.stages.length + ' days · ' : ''}${r.distanceKm} km · ${r.climbM} m climb${r.start ? ' · start ' + escapeHtml(r.start) : ''}${r.checkpoints ? ` · ${r.checkpoints} checkpoints` : ''}</span>${days(r)}</button>`;
     $('raceCards').innerHTML = list.map(card).join('');
     const confirmBtn = $('suConfirm');
     const update = () => {

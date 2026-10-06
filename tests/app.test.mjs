@@ -57,7 +57,8 @@ try {
     const ready0 = await text(page, '#raceCards');
     await shot(page, '8-setup-race');
     check('Race list shows The Challenge', (await text(page, '#raceCards')).includes('The Challenge') && (await text(page, '#raceCards')).includes('28.6 km'), await text(page, '#raceCards'));
-    check('Race list offers all three races', await page.locator('.racecard').count() === 3 && ['The Ultra', 'The Epic'].every(n => ready0.includes(n)), ready0);
+    check('Race list offers all five races', await page.locator('.racecard').count() === 5 && ['The Mutarazi Traverse', 'The Ultra', 'Back2Back', 'The Epic'].every(n => ready0.includes(n)), ready0);
+    check('Back2Back card lists both days', ready0.includes('2 days') && ready0.includes('Day 1: The Mutarazi Traverse: 29.6 km') && ready0.includes('Day 2: The Challenge: 28.6 km'));
     check('Cannot continue before choosing a race', await page.locator('#suConfirm').isDisabled());
     await page.click('.racecard[data-id="the-challenge"]');
     check('Confirm button names the chosen race', (await text(page, '#suConfirm')).includes('I am running The Challenge'));
@@ -94,7 +95,7 @@ try {
     check('Change race opens the race list', (await text(page, '#setupBody')).includes('Choose your race'));
     await page.click('.racecard[data-id="the-challenge"]');
     await page.click('#suConfirm');
-    await page.waitForFunction(() => !document.getElementById('setup').classList.contains('open'));
+    await page.waitForFunction(() => !document.getElementById('setup').classList.contains('open') && !document.querySelector('#raceChip .spin'));
     check('Change race confirms and returns to the map', (await text(page, '#raceChip')).startsWith('The Challenge'));
     // Switch to the Ultra: its checkpoints show, and the next one is named.
     await page.click('#menuBtn'); await page.waitForTimeout(300);
@@ -112,6 +113,30 @@ try {
     await page.evaluate(() => fitArea(L.latLngBounds(course.pts.map(p => [p[0], p[1]]))));
     await page.waitForTimeout(1200);
     await shot(page, '10-ultra');
+    // Back2Back: two days, drawn separately (no line joining them), and the panel says which day.
+    await page.click('#menuBtn'); await page.waitForTimeout(300);
+    await page.click('#changeRaceBtn');
+    await page.waitForSelector('.racecard');
+    await page.click('.racecard[data-id="back2back"]');
+    await page.click('#suConfirm');
+    await page.waitForFunction(() => course && course.info && course.info.id === 'back2back');
+    const b2b = await page.evaluate(() => ({
+      stages: course.stages.length,
+      lines: courseLayer.getLayers().filter(l => l instanceof L.Polyline).length,
+      labels: [...document.querySelectorAll('.lbl.wpt')].map(e => e.textContent).filter(t => /START|FINISH/.test(t)),
+    }));
+    check('Back2Back: two days drawn as separate lines', b2b.stages === 2 && b2b.lines === 4, JSON.stringify(b2b));
+    check('Back2Back: day labels (Day 1 loop, Day 2 start and finish)',
+      b2b.labels.includes('Day 1 START / FINISH') && b2b.labels.includes('Day 2 START') && b2b.labels.includes('Day 2 FINISH'), b2b.labels.join(', '));
+    const d2 = await page.evaluate(() => course.stages[1].pts[100]);
+    await fakeFix(page, { latitude: d2[0], longitude: d2[1] });
+    check('Back2Back: on Day 2 the panel says so', (await text(page, '#courseDone')).startsWith('Day 2:') && (await text(page, '#courseStatus')).includes('On your route'), await text(page, '#courseDone'));
+    const d1 = await page.evaluate(() => course.stages[0].pts[300]);
+    await fakeFix(page, { latitude: d1[0], longitude: d1[1] });
+    check('Back2Back: on Day 1 the panel says so', (await text(page, '#courseDone')).startsWith('Day 1:'), await text(page, '#courseDone'));
+    await page.evaluate(() => fitArea(L.latLngBounds(course.pts.map(p => [p[0], p[1]]))));
+    await page.waitForTimeout(1200);
+    await shot(page, '11-back2back');
     // While GPS is still searching, a spinner and a running count show it is working.
     await page.evaluate(() => { gps.fix = null; gps.state = 'searching'; gps.searchSince = Date.now() - 7000; renderGps(); });
     check('Searching for GPS shows a spinner and seconds', await page.locator('#gpsBadges .spin').count() === 1 && (await text(page, '#gpsBadges')).includes('7 s'), await text(page, '#gpsBadges'));
