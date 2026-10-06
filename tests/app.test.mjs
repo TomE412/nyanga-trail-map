@@ -140,6 +140,25 @@ try {
   check('Recording listed in menu with export buttons', (await text(page, '#trackList')).includes('Export GPX'));
 
   // ------------------------------------------------------------------
+  // Emergency and medical guide
+  await page.click('#medBtn');
+  await page.waitForFunction(() => document.getElementById('medContent').textContent.includes('DRSABC'));
+  const med = await page.evaluate(() => ({
+    tel: [...document.querySelectorAll('#medContent a[href^="tel:"]')].map(a => a.getAttribute('href')),
+    nested: document.querySelectorAll('#medContent a a').length,
+    sections: document.querySelectorAll('#medContent h1').length,
+  }));
+  check('Medical guide opens from the menu with all sections', med.sections >= 20, `${med.sections} sections`);
+  check('Medical guide: call links for race medics and ACE ambulance, none broken',
+    med.tel.includes('tel:+263780661516') && med.tel.includes('tel:+263782999901') && med.nested === 0, `${med.tel.length} call links`);
+  await page.click('#medContent a[href="#med-heatstroke"]');
+  await page.waitForTimeout(300);
+  const jumped = await page.evaluate(() => { const r = document.getElementById('med-heatstroke').getBoundingClientRect(); return r.top >= 0 && r.top < 300; });
+  check('Medical guide: quick-reference button jumps to the right section', jumped);
+  await shot(page, '7-medical');
+  await page.click('#medClose');
+
+  // ------------------------------------------------------------------
   // Course
   await page.setInputFiles('#gpxInput', 'tests/test-course.gpx');
   await page.waitForSelector('#courseInfo:not([hidden])');
@@ -174,6 +193,13 @@ try {
   const broken = await page.evaluate(() => [...document.querySelectorAll('.leaflet-tile')].filter(i => i.complete && i.naturalWidth === 0).length);
   check('Offline: contour map pieces load outside race map', broken === 0, `${broken} missing`);
   check('Offline: recordings still there', await page.evaluate(async () => (await getTracks()).length === 1));
+  await page.evaluate(() => openMedical());
+  await page.waitForFunction(() => document.getElementById('medContent').textContent.includes('DRSABC'), null, { timeout: 8000 }).catch(() => {});
+  await page.waitForTimeout(1000);
+  const medOff = await page.evaluate(() => ({ ok: document.getElementById('medContent').textContent.includes('Snakebite'),
+    imgs: [...document.querySelectorAll('#medContent img')].map(i => i.complete && i.naturalWidth > 0) }));
+  check('Offline: medical guide opens with all diagrams', medOff.ok && medOff.imgs.length === 7 && medOff.imgs.every(Boolean), JSON.stringify(medOff));
+  await page.click('#medClose');
   await page.evaluate(() => { map.setView([-18.395, 32.835], 15); });
   await page.waitForTimeout(800);
   await shot(page, '6-offline');

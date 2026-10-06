@@ -118,6 +118,40 @@
   .me.stale .me-arrow { display: none; }
   .me.stale .me-tag, .me.poor .me-tag { display: block; }
 
+  /* Medical guide: full-screen, plain and high contrast */
+  .medical { position: fixed; inset: 0; z-index: 3000; background: #fff; display: none; flex-direction: column; }
+  .medical.open { display: flex; }
+  .med-bar { display: flex; align-items: center; gap: 8px; padding: calc(env(safe-area-inset-top) + 8px) 12px 8px;
+    background: #b71c1c; color: #fff; }
+  .med-bar b { flex: 1; font-size: 16px; }
+  .med-bar .pill { border-color: #fff; }
+  .med-body { flex: 1; overflow-y: auto; padding: 12px 16px calc(env(safe-area-inset-bottom) + 40px); font-size: 16px; line-height: 1.45; }
+  .med-intro { background: #fff3e0; border-radius: 10px; padding: 10px 12px; font-size: 14px; margin-bottom: 12px; }
+  .med-body h1 { font-size: 21px; color: #b71c1c; margin: 26px 0 8px; border-bottom: 2px solid #b71c1c; padding-bottom: 4px; }
+  .med-body h1.med-title { border: 0; font-size: 24px; margin-top: 4px; }
+  .med-body h2 { font-size: 18px; margin: 18px 0 6px; }
+  .med-body h3 { font-size: 16px; margin: 14px 0 4px; }
+  .med-body p { margin: 6px 0; }
+  .med-body .med-step { padding-left: 12px; border-left: 4px solid #b71c1c; margin: 6px 0; }
+  .med-body .med-note { font-size: 14px; color: #555; }
+  .med-body img { max-width: 100%; height: auto; display: block; margin: 10px auto; }
+  .med-body .med-table { overflow-x: auto; margin: 10px 0; }
+  .med-body table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  .med-body td, .med-body th { border: 1px solid #ccc; padding: 6px 8px; vertical-align: top; text-align: left; }
+  .med-body th { background: #f3f3f3; }
+  .med-body td p, .med-body th p { margin: 2px 0; }
+  .med-body a { color: #0d47a1; font-weight: 700; }
+  .med-body a.med-tel { color: #b71c1c; white-space: nowrap; }
+  .med-body .med-buttons table { table-layout: fixed; }
+  .med-body .med-buttons td, .med-body .med-buttons th { font-size: 12px; padding: 6px 5px; overflow-wrap: anywhere; }
+  .med-body .med-buttons a.med-tel { white-space: normal; }
+  .med-body .med-buttons a { text-decoration: none; display: block; }
+  .med-body .med-logo { width: 160px; margin: 4px auto 0; }
+  .med-body .med-img { overflow-x: auto; cursor: zoom-in; }
+  .med-body .med-img img { margin: 10px 0 2px; }
+  .med-body .med-img.zoomed img { max-width: none; width: 1050px; }
+  .btn.sos { background: #b71c1c; }
+
   /* Map labels */
   .lbl { white-space: nowrap; font-size: 11px; font-weight: 600; color: #3b2a1a;
     text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 3px #fff; transform: translate(-50%, -50%); position: absolute; }
@@ -211,6 +245,7 @@
 <div class="sheet" id="sheet">
   <h2>Nyanga Trail Map</h2>
   <div class="small" id="version"></div>
+  <button class="btn sos" id="medBtn">Emergency and medical guide</button>
 
   <h3>Offline map</h3>
   <div class="small" id="dlText">Download the map once on wifi, then it works with no signal.</div>
@@ -243,6 +278,14 @@
     Paths and names: © OpenStreetMap contributors (ODbL). Map library: Leaflet.
   </div>
   <button class="btn secondary" id="closeSheet">Close</button>
+</div>
+
+<div class="medical" id="medical" role="dialog" aria-label="Emergency and medical guide">
+  <div class="med-bar"><b>Emergency and medical guide</b><button class="pill" id="medTop">Top</button><button class="pill" id="medClose">Close</button></div>
+  <div class="med-body" id="medBody">
+    <div class="med-intro">The official <b>SkyRun 2026 Athlete Medical Guide</b> from the race director, saved on this phone so it works with no signal. Tap a phone number to call; calls need signal.</div>
+    <div id="medContent">Loading…</div>
+  </div>
 </div>
 
 <script src="vendor/leaflet.js"></script>

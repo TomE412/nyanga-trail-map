@@ -17,6 +17,7 @@ airplane mode once downloaded.
 ## Rebuilding the map (computer only)
 - `npm run osm`: refresh paths and place names from OpenStreetMap
 - `node --max-old-space-size=6144 tools/render-turaco.mjs "path/TuracoTrail 2026 geo.tiff" tiles-turaco26`: re-cut the race map. For a new map version use a new folder name, then update `TILE_SETS`, the race layer URL and `RACE_BBOX` in `app.js` and the index path in `sw.js`
+- `node tools/build-medical.mjs "path/SkyRun 2026 Athlete Medical Guide.docx"`: rebuild the emergency and medical guide (`data/medical.html` + diagrams). If the number of diagrams changes, update the list in `sw.js`
 - `npm run tiles`: redraw the contour map. This needs the Copernicus elevation file in
   `tools/data/` (see `tools/render-tiles.mjs`)
 - `npm test`: browser tests: GPS states, recording and recovery, export, course, offline

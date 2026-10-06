@@ -1,11 +1,14 @@
 // Offline worker. Bump SHELL on every release (match APP_VERSION in app.js);
 // that is what makes phones pick up new files. The tile cache is kept across
 // releases so runners don't have to download the map again.
-const SHELL = 'shell-v4';
+const SHELL = 'shell-v5';
 const TILES = 'tiles-v2';
 const CORE = [
   './', 'index.html', 'app.js', 'manifest.json', 'icon-192.png', 'icon-512.png',
   'vendor/leaflet.js', 'vendor/leaflet.css', 'data/osm.geojson', 'tiles/index.json', 'tiles-turaco26/index.json',
+  // Medical guide (made by tools/build-medical.mjs); keep in step with data/medical/.
+  'data/medical.html', 'data/medical/image1.webp', 'data/medical/image2.webp', 'data/medical/image3.webp',
+  'data/medical/image4.webp', 'data/medical/image5.webp', 'data/medical/image6.webp', 'data/medical/image7.webp',
 ];
 
 self.addEventListener('install', e => {

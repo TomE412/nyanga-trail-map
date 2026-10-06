@@ -16,6 +16,7 @@
     "d3-contour": "^4.0.2",
     "geotiff": "^3.0.5",
     "leaflet": "^1.9.4",
+    "mammoth": "^1.13.0",
     "playwright": "^1.63.0"
   },
   "private": true

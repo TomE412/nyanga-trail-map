@@ -1,6 +1,6 @@
 // Nyanga Trail Map: offline race map with live GPS, run recording and course.
 // Keep APP_VERSION in step with SHELL in sw.js.
-const APP_VERSION = 'v4 (6 Oct 2026)';
+const APP_VERSION = 'v5 (6 Oct 2026)';
 const TILE_CACHE = 'tiles-v2';
 // Bump when a tile set is added or redrawn, so phones know to download again.
 const TILES_TAG = 'contours2+turaco2026';
@@ -901,6 +901,34 @@ $('debugToggle').onchange = e => {
   }
   renderDebug();
 };
+
+// Emergency and medical guide: the race's official guide, loaded only when opened.
+let medLoaded = false;
+async function openMedical() {
+  $('medical').classList.add('open');
+  if (medLoaded) return;
+  try {
+    const res = await fetch('data/medical.html');
+    if (!res.ok) throw new Error('status ' + res.status);
+    $('medContent').innerHTML = await res.text();
+    medLoaded = true;
+  } catch (err) {
+    $('medContent').textContent = 'The medical guide could not be opened (' + (err.message || err) + '). Open the app once with internet so it is saved on this phone.';
+  }
+}
+$('medBtn').onclick = () => { closeSheet(); openMedical(); };
+$('medClose').onclick = () => $('medical').classList.remove('open');
+$('medTop').onclick = () => $('medBody').scrollTo({ top: 0 });
+// The guide's own "jump to" buttons scroll within the guide; diagrams enlarge on tap.
+$('medBody').addEventListener('click', e => {
+  const fig = e.target.closest('.med-img');
+  if (fig) { fig.classList.toggle('zoomed'); return; }
+  const a = e.target.closest('a[href^="#med-"]');
+  if (!a) return;
+  e.preventDefault();
+  const target = document.getElementById(a.getAttribute('href').slice(1));
+  if (target) target.scrollIntoView({ block: 'start' });
+});
 
 function openSheet() {
   renderTracks(); refreshOfflineStatus();
