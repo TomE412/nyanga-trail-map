@@ -171,12 +171,23 @@ try {
   // ------------------------------------------------------------------
   // Offline download, then full reload with the internet off
   await ctx.setGeolocation({ ...EDDY, accuracy: 8 });
+  // A phone that still holds pieces of the removed contour map has them cleared at startup.
+  const cleared = await page.evaluate(async () => {
+    const c = await caches.open(TILE_CACHE);
+    await c.put('tiles/16/2/2.webp', new Response('old contour'));
+    localStorage.removeItem('tilesCleaned');
+    await removeOldTiles();
+    return !(await c.match('tiles/16/2/2.webp'));
+  });
+  check('Old contour map pieces removed from the phone', cleared);
+  const sets = await page.evaluate(() => [...new Set(performance.getEntriesByType('resource').map(e => (e.name.match(/\/(tiles[\w-]*)\//) || [])[1]).filter(Boolean))]);
+  check('Only the 2026 race map is loaded', sets.length === 1 && sets[0] === 'tiles-turaco26', sets.join(', '));
   // Pretend this phone still has a piece of an older race map saved.
   await page.evaluate(async () => (await caches.open(TILE_CACHE)).put('tiles-turaco/16/1/1.webp', new Response('old')));
   await page.evaluate(() => openSheet()); await page.waitForTimeout(300);
   await page.click('#dlBtn');
   await page.waitForFunction(() => /saved on this phone|missing|failed/.test(document.getElementById('dlText').textContent), null, { timeout: 180000 });
-  check('Map download (both maps) verified', (await text(page, '#dlText')).includes('saved on this phone'), await text(page, '#dlText'));
+  check('Map download verified', (await text(page, '#dlText')).includes('saved on this phone'), await text(page, '#dlText'));
   check('Old race map pieces removed after download', await page.evaluate(async () => !(await (await caches.open(TILE_CACHE)).match('tiles-turaco/16/1/1.webp'))));
   check('Race map is the 2026 version', await page.evaluate(() => raceLayer._url.includes('turaco26') && raceBounds.contains([-18.50, 32.72])));
   await page.click('#closeSheet'); await page.waitForTimeout(300);
@@ -188,10 +199,10 @@ try {
   await page.waitForTimeout(1500);
   const tiles = await page.evaluate(() => [...document.querySelectorAll('.leaflet-tile')].map(i => ({ ok: i.complete && i.naturalWidth > 0, race: i.src.includes('turaco') })));
   check('Offline: race map pieces load', tiles.filter(t => t.race && t.ok).length > 4 && !tiles.some(t => t.race && !t.ok), `${tiles.filter(t => t.race && t.ok).length} race pieces`);
-  await page.evaluate(() => { map.setView([-18.30, 32.70], 15); });
+  await page.evaluate(() => { map.setView([-18.45, 32.75], 15); });
   await page.waitForTimeout(1500);
   const broken = await page.evaluate(() => [...document.querySelectorAll('.leaflet-tile')].filter(i => i.complete && i.naturalWidth === 0).length);
-  check('Offline: contour map pieces load outside race map', broken === 0, `${broken} missing`);
+  check('Offline: map pieces load in the south-west of the 2026 map', broken === 0, `${broken} missing`);
   check('Offline: recordings still there', await page.evaluate(async () => (await getTracks()).length === 1));
   await page.evaluate(() => openMedical());
   await page.waitForFunction(() => document.getElementById('medContent').textContent.includes('DRSABC'), null, { timeout: 8000 }).catch(() => {});

@@ -1,11 +1,10 @@
 // Nyanga Trail Map: offline race map with live GPS, run recording and course.
 // Keep APP_VERSION in step with SHELL in sw.js.
-const APP_VERSION = 'v5 (6 Oct 2026)';
+const APP_VERSION = 'v6 (6 Oct 2026)';
 const TILE_CACHE = 'tiles-v2';
 // Bump when a tile set is added or redrawn, so phones know to download again.
-const TILES_TAG = 'contours2+turaco2026';
-const TILE_SETS = ['tiles', 'tiles-turaco26'];
-const BBOX = { west: 32.62, east: 32.98, south: -18.42, north: -18.08 };
+const TILES_TAG = 'turaco2026';
+const TILE_SETS = ['tiles-turaco26'];
 // Far and Wide "Turaco Trail 2026" race map, bounds read from its GeoTIFF.
 const RACE_BBOX = { west: 32.69659612566003, east: 32.992700072259964, south: -18.523914235060392, north: -18.215629827297686 };
 const RACE_SOURCE_SHA256 = '2c0463b6ffde958bc8a0b5489d04023cbd628d08b432fdc2262097592d4b9aac';
@@ -37,9 +36,9 @@ function toast(msg, ms = 4000) {
 // =====================================================================
 // Map
 // =====================================================================
-const contourBounds = L.latLngBounds([BBOX.south, BBOX.west], [BBOX.north, BBOX.east]);
 const raceBounds = L.latLngBounds([RACE_BBOX.south, RACE_BBOX.west], [RACE_BBOX.north, RACE_BBOX.east]);
-const bounds = L.latLngBounds(contourBounds.getSouthWest(), contourBounds.getNorthEast()).extend(raceBounds);
+// The whole map area is the race map.
+const bounds = raceBounds;
 const map = L.map('map', {
   preferCanvas: true, zoomControl: false, minZoom: 10, maxZoom: 18,
   maxBounds: bounds.pad(0.3), maxBoundsViscosity: 0.8,
@@ -53,14 +52,10 @@ try {
 } catch {}
 map.on('moveend', () => pref('view', JSON.stringify({ c: map.getCenter(), z: map.getZoom() })));
 
-L.tileLayer('tiles/{z}/{x}/{y}.webp', {
-  minZoom: 10, maxZoom: 18, minNativeZoom: 11, maxNativeZoom: 16, bounds: contourBounds,
-  attribution: '© OpenStreetMap contributors · Copernicus DEM',
-}).addTo(map);
 const raceLayer = L.tileLayer('tiles-turaco26/{z}/{x}/{y}.webp', {
   minZoom: 10, maxZoom: 18, minNativeZoom: 11, maxNativeZoom: 16, bounds: raceBounds,
   attribution: 'Race map © Far and Wide',
-});
+}).addTo(map);
 L.control.scale({ imperial: false, position: 'topleft' }).addTo(map);
 // The position marker sits in its own layer above every label so it is never hidden.
 map.createPane('gps').style.zIndex = 650;
@@ -70,47 +65,10 @@ map.on('zoomend', setZoomClass); setZoomClass();
 
 const label = (text, cls) => L.divIcon({ className: '', html: `<div class="lbl ${cls}">${text}</div>`, iconSize: [0, 0] });
 
-// Paths, roads, streams and names from OpenStreetMap. The race map already
-// shows these, so they only appear when the race map is switched off.
-const STYLE = {
-  river: { color: '#3d85c6', weight: 2.2 },
-  stream: { color: '#6aaee8', weight: 1.2 },
-  road: { color: '#7a6a55', weight: 2.6 },
-  track: { color: '#6d4c41', weight: 1.8, dashArray: '6 4' },
-  path: { color: '#c62828', weight: 1.8, dashArray: '3 4' },
-};
-const osmLayer = L.layerGroup();
-let raceOn = pref('raceMap') !== '0';
-function setRaceMap(on) {
-  raceOn = on;
-  if (on) { raceLayer.addTo(map); osmLayer.remove(); } else { raceLayer.remove(); osmLayer.addTo(map); }
-  $('raceToggle').checked = on;
-  pref('raceMap', on ? '1' : '0');
-}
-setRaceMap(raceOn);
-$('raceToggle').onchange = e => setRaceMap(e.target.checked);
-
-fetch('data/osm.geojson').then(r => r.json()).then(gj => {
-  const order = ['stream', 'river', 'road', 'track', 'path'];
-  gj.features.sort((a, b) => order.indexOf(a.properties.kind) - order.indexOf(b.properties.kind));
-  L.geoJSON(gj, {
-    filter: f => f.geometry.type === 'LineString',
-    style: f => ({ opacity: 0.9, ...STYLE[f.properties.kind] }),
-    interactive: false,
-  }).addTo(osmLayer);
-  for (const f of gj.features) {
-    if (f.geometry.type !== 'Point' || !f.properties.name) continue;
-    const { kind, name, ele } = f.properties;
-    const [lon, lat] = f.geometry.coordinates;
-    const text = escapeHtml(name) + (ele ? ` ${escapeHtml(ele)}m` : '');
-    L.marker([lat, lon], { icon: label(text, kind === 'peak' ? 'peak' : 'minor'), interactive: false }).addTo(osmLayer);
-  }
-}).catch(err => console.warn('Could not load paths', err));
-
 // Map buttons
 $('zoomInBtn').onclick = () => map.zoomIn();
 $('zoomOutBtn').onclick = () => map.zoomOut();
-$('fitBtn').onclick = () => { setFollow(false); fitArea(raceOn ? raceBounds : bounds); };
+$('fitBtn').onclick = () => { setFollow(false); fitArea(raceBounds); };
 
 // =====================================================================
 // GPS
@@ -292,7 +250,7 @@ function renderDetails() {
       ['Altitude', f.alt != null ? `${Math.round(f.alt)} m${f.altAcc != null ? ` (±${Math.round(f.altAcc)} m)` : ''}` : 'Not available'],
       ['Heading', h ? `${Math.round(h.deg)}° from ${h.src}` : 'Not available (shown only when moving, or with compass on)'],
       ['Speed', f.speed != null ? `${(f.speed * 3.6).toFixed(1)} km/h` : 'Not available'],
-      ['On race map', raceBounds.contains([f.lat, f.lon]) ? 'Yes' : 'No']);
+      ['On the map', raceBounds.contains([f.lat, f.lon]) ? 'Yes' : 'No']);
   }
   d.innerHTML = rows.map(([k, v]) => `<div class="row"><span>${escapeHtml(k)}</span><b>${escapeHtml(v)}</b></div>`).join('');
 }
@@ -626,6 +584,19 @@ async function allTileUrls() {
   return { urls, bytes, sets };
 }
 
+// Free space taken by pieces of maps this version no longer uses (once per version).
+async function removeOldTiles() {
+  if (pref('tilesCleaned') === TILES_TAG || !('caches' in window)) return;
+  try {
+    const cache = await caches.open(TILE_CACHE);
+    for (const req of await cache.keys()) {
+      const set = new URL(req.url).pathname.split('/').slice(-4)[0];
+      if (set.startsWith('tiles') && !TILE_SETS.includes(set)) await cache.delete(req);
+    }
+    pref('tilesCleaned', TILES_TAG);
+  } catch (err) { console.warn('Could not remove old map pieces', err); }
+}
+
 async function storageInfo() {
   if (!navigator.storage || !navigator.storage.estimate) return null;
   try { return await navigator.storage.estimate(); } catch { return null; }
@@ -885,7 +856,7 @@ function renderDebug() {
     `speed    ${f && f.speed != null ? f.speed.toFixed(2) + ' m/s' : '-'}`,
     `age      ${f ? freshness(f).age.toFixed(1) + ' s (' + freshness(f).level + ')' : '-'}`,
     `zoom     ${map.getZoom()}   centre ${c.lat.toFixed(5)}, ${c.lng.toFixed(5)}`,
-    `inside   race map ${f ? raceBounds.contains([f.lat, f.lon]) : '-'} · any map ${f ? bounds.contains([f.lat, f.lon]) : '-'}`,
+    `inside   map ${f ? raceBounds.contains([f.lat, f.lon]) : '-'}`,
     `gps      ${gps.state} · perm ${gps.perm} · follow ${gps.follow}`,
     `rec      ${recorder.status}${recorder.track ? ` #${recorder.track.id} ${recorder.track.points} pts` : ''}`,
     `app      ${APP_VERSION} · tiles ${TILES_TAG} · saved ${pref('tilesSaved') === TILES_TAG}`,
@@ -951,6 +922,8 @@ try {
   const saved = pref('course');
   if (saved) { course = prepareCourse(JSON.parse(saved)); drawCourse(); }
 } catch (err) { console.warn('Saved course unreadable', err); }
+if (pref('tilesSaved') === 'contours2+turaco2026') pref('tilesSaved', TILES_TAG);
+removeOldTiles();
 refreshOfflineStatus();
 if (pref('compass') === '1') setCompass(true, false);
 if (pref('debug') === '1') { $('debugToggle').checked = true; $('debugToggle').onchange({ target: $('debugToggle') }); }
