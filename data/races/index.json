@@ -6,7 +6,27 @@
   "start": "",
   "distanceKm": 28.6,
   "climbM": 1383,
-  "checkpoints": 0,
+  "checkpoints": 9,
   "file": "data/races/the-challenge.json"
+ },
+ {
+  "id": "the-ultra",
+  "name": "The Ultra",
+  "version": 1,
+  "start": "",
+  "distanceKm": 52.5,
+  "climbM": 3052,
+  "checkpoints": 21,
+  "file": "data/races/the-ultra.json"
+ },
+ {
+  "id": "the-epic",
+  "name": "The Epic",
+  "version": 1,
+  "start": "",
+  "distanceKm": 64.5,
+  "climbM": 2970,
+  "checkpoints": 16,
+  "file": "data/races/the-epic.json"
  }
 ]

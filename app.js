@@ -1,6 +1,6 @@
 // Nyanga Trail Map: offline race map with live GPS, run recording and course.
 // Keep APP_VERSION in step with SHELL in sw.js.
-const APP_VERSION = 'v7 (6 Oct 2026)';
+const APP_VERSION = 'v8 (6 Oct 2026)';
 const TILE_CACHE = 'tiles-v2';
 // Bump when a tile set is added or redrawn, so phones know to download again.
 const TILES_TAG = 'turaco2026';
@@ -26,6 +26,10 @@ const $ = id => document.getElementById(id);
 const escapeHtml = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pref = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch {} return null; };
 $('version').textContent = 'Version ' + APP_VERSION;
+
+// A small spinning wheel shown wherever the app is waiting on something.
+const SPIN = '<span class="spin" aria-hidden="true"></span>';
+const secondsSince = t => Math.max(0, Math.round((Date.now() - t) / 1000));
 
 let toastTimer;
 function toast(msg, ms = 4000) {
@@ -60,7 +64,10 @@ L.control.scale({ imperial: false, position: 'topleft' }).addTo(map);
 // The position marker sits in its own layer above every label so it is never hidden.
 map.createPane('gps').style.zIndex = 650;
 
-function setZoomClass() { map.getContainer().classList.toggle('zoom-lo', map.getZoom() < 13); }
+function setZoomClass() {
+  map.getContainer().classList.toggle('zoom-lo', map.getZoom() < 13);
+  map.getContainer().classList.toggle('zoom-mid', map.getZoom() < 15);
+}
 map.on('zoomend', setZoomClass); setZoomClass();
 
 const label = (text, cls) => L.divIcon({ className: '', html: `<div class="lbl ${cls}">${text}</div>`, iconSize: [0, 0] });
@@ -93,7 +100,7 @@ const meMarker = L.marker([0, 0], {
 function startGps() {
   if (!('geolocation' in navigator)) { gps.state = 'unsupported'; renderGps(); return; }
   if (gps.watchId !== null) return;
-  gps.state = 'searching'; gps.errorCode = null;
+  gps.state = 'searching'; gps.errorCode = null; gps.searchSince = Date.now();
   gps.watchId = navigator.geolocation.watchPosition(onFix, onGpsError,
     { enableHighAccuracy: true, maximumAge: 2000, timeout: 60000 });
   pref('gpsOn', '1');
@@ -200,7 +207,7 @@ function renderGps() {
     badges.push(badge('bad', '✕ No GPS signal'));
     hint = 'Check that Location (GPS) is switched on in your phone settings, and move into the open.';
   } else if (!f) {
-    badges.push(badge('warn', '… Searching for GPS'));
+    badges.push(`<span class="badge warn">${SPIN}Searching for GPS · ${secondsSince(gps.searchSince || Date.now())} s</span>`);
     hint = 'This can take up to a minute. Stand in the open, away from cliffs.';
   } else {
     const { age, level } = freshness(f);
@@ -513,6 +520,7 @@ async function saveFile(name, type, text) {
 }
 
 async function exportTrack(id, kind) {
+  toast('Preparing the file…', 2500);
   try {
     const t = (await getTracks()).find(x => x.id === id), pts = await getPoints(id);
     const base = 'run-' + t.startedAt.slice(0, 16).replace(/[:T]/g, '-');
@@ -623,6 +631,7 @@ async function downloadMap(btn, bar, text) {
   btn.disabled = true; bar.style.display = 'block';
   try {
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+    text.innerHTML = `${SPIN}Starting download…`;
     const { urls, bytes } = await allTileUrls();
     const s = await storageInfo();
     if (s && s.quota && s.quota - s.usage < bytes * 1.5 &&
@@ -645,13 +654,13 @@ async function downloadMap(btn, bar, text) {
         done++;
         if (done % 10 === 0 || done === urls.length) {
           bar.firstElementChild.style.width = (100 * done / urls.length) + '%';
-          text.textContent = `Downloading… ${done} of ${urls.length} pieces (about ${mb} MB in total)`;
+          text.innerHTML = `${SPIN}Downloading… ${done} of ${urls.length} pieces (about ${mb} MB in total)`;
         }
       }
     }
     await Promise.all(Array.from({ length: 6 }, worker));
     // Check every piece really is on the phone before calling it saved.
-    text.textContent = 'Checking…';
+    text.innerHTML = `${SPIN}Checking every piece is saved…`;
     const have = new Set((await cache.keys()).map(r => new URL(r.url).pathname.split('/').slice(-4).join('/')));
     const missing = urls.filter(u => !have.has(u.split('/').slice(-4).join('/'))).length;
     if (failed || missing) {
@@ -705,6 +714,7 @@ async function loadRaceList() {
 }
 
 async function showRace(id) {
+  $('raceChip').innerHTML = `${SPIN}Loading your race…`;
   const info = (await loadRaceList()).find(r => r.id === id);
   if (!info) throw new Error('Your race is no longer in the app. Please choose your race again.');
   const res = await fetch(info.file);
@@ -774,6 +784,7 @@ function nearestOnCourse(c, lat, lon, prevAlong = null) {
 }
 
 const km = m => (m / 1000).toFixed(m < 10000 ? 2 : 1) + ' km';
+const CHECKPOINT_ICON = { water: '💧', station: '★', point: '◆' };
 
 // A point (and the direction of travel there) a given distance along the route.
 function alongPoint(dist) {
@@ -806,7 +817,10 @@ function drawCourse() {
   }
   courseLayer.addLayer(L.marker(ll[0], { icon: label('START', 'wpt'), interactive: false }));
   courseLayer.addLayer(L.marker(ll[ll.length - 1], { icon: label('FINISH', 'wpt'), interactive: false }));
-  for (const w of course.wpts) courseLayer.addLayer(L.marker([w.lat, w.lon], { icon: label(escapeHtml(w.name), 'wpt'), interactive: false }));
+  for (const w of course.wpts) {
+    const html = `<span class="ico">${CHECKPOINT_ICON[w.kind] || '◆'}</span><span class="nm"> ${escapeHtml(w.name)}</span>`;
+    courseLayer.addLayer(L.marker([w.lat, w.lon], { icon: label(html, 'wpt cp-' + (w.kind || 'point')), interactive: false }));
+  }
   courseLayer.addTo(map);
   $('courseInfo').hidden = false;
   updateCourse();
@@ -834,7 +848,7 @@ function updateCourse() {
   const climb = course.hasEle ? ` · ${Math.round(course.climbLeft[n.i])} m climb left` : '';
   $('courseLeft').textContent = `${km(course.total - n.along)} to go${climb}`;
   const next = course.wpts.find(w => w.along > n.along + 20);
-  $('courseNext').textContent = next ? `Next: ${next.name} in ${km(next.along - n.along)}` : '';
+  $('courseNext').textContent = next ? `Next: ${CHECKPOINT_ICON[next.kind] || '◆'} ${next.name} in ${km(next.along - n.along)}` : '';
 }
 
 // ---------- First-time setup ----------
@@ -862,7 +876,7 @@ const setup = {
       await showRace(profile.raceId);
       setFollow(false);
       fitArea(L.latLngBounds(course.pts.map(p => [p[0], p[1]])));
-    } catch (err) { alert(err.message || err); }
+    } catch (err) { renderRaceInfo(); alert(err.message || err); }
   },
 
   render() {
@@ -907,7 +921,7 @@ const setup = {
   race() {
     return `<h2>Choose your race</h2>
       <p class="small">Only your race's route will be shown on the map. Check you pick the distance you entered.</p>
-      <div id="raceCards">Loading races…</div>
+      <div id="raceCards">${SPIN}Loading races…</div>
       <button class="btn" id="suConfirm" disabled>Choose a race above</button>
       <button class="btn secondary" id="suBack">${this.changing ? 'Cancel' : 'Back'}</button>`;
   },
@@ -973,10 +987,13 @@ const setup = {
   tick() {
     const el = document.getElementById('suGps');
     if (!el || this.step !== 'location') return;
-    el.textContent = gps.state === 'denied' ? '✕ Location is blocked. You can allow it later in your phone settings; see Details on the map screen.'
-      : gps.fix ? `✓ Location found (±${Math.round(gps.fix.acc)} m)`
-      : gps.state === 'searching' ? '… Looking for GPS. This can take a minute; you can carry on meanwhile.'
-      : 'Tap "Allow location" and accept when your phone asks.';
+    if (gps.state === 'denied') el.textContent = '✕ Location is blocked. You can allow it later in your phone settings; see Details on the map screen.';
+    else if (gps.fix) el.textContent = `✓ Location found (±${Math.round(gps.fix.acc)} m)`;
+    else if (gps.state === 'searching') {
+      const s = secondsSince(gps.searchSince || Date.now());
+      el.innerHTML = `${SPIN}Looking for GPS… ${s} s. If your phone asked for permission, tap Allow.` +
+        (s >= 15 ? '<br>This can take a minute or two, especially indoors. You can tap <b>Next</b>: it keeps looking in the background.' : '');
+    } else el.textContent = 'Tap "Allow location" and accept when your phone asks.';
   },
 
   ready() {
@@ -1052,6 +1069,7 @@ let medLoaded = false;
 async function openMedical() {
   $('medical').classList.add('open');
   if (medLoaded) return;
+  $('medContent').innerHTML = `${SPIN}Loading the guide…`;
   try {
     const res = await fetch('data/medical.html');
     if (!res.ok) throw new Error('status ' + res.status);
@@ -1095,7 +1113,7 @@ fitButtons();
 try { localStorage.removeItem('course'); } catch {} // courses loaded by hand in earlier versions
 renderRaceInfo();
 if (profile.setupDone && profile.raceId) {
-  showRace(profile.raceId).catch(err => { toast(err.message || String(err), 6000); setup.open('race', true); });
+  showRace(profile.raceId).catch(err => { renderRaceInfo(); toast(err.message || String(err), 6000); setup.open('race', true); });
 } else {
   setup.open('welcome');
 }

@@ -54,8 +54,10 @@ try {
     await page.fill('#suBib', '142');
     await page.click('#suNext');
     await page.waitForSelector('.racecard');
+    const ready0 = await text(page, '#raceCards');
     await shot(page, '8-setup-race');
     check('Race list shows The Challenge', (await text(page, '#raceCards')).includes('The Challenge') && (await text(page, '#raceCards')).includes('28.6 km'), await text(page, '#raceCards'));
+    check('Race list offers all three races', await page.locator('.racecard').count() === 3 && ['The Ultra', 'The Epic'].every(n => ready0.includes(n)), ready0);
     check('Cannot continue before choosing a race', await page.locator('#suConfirm').isDisabled());
     await page.click('.racecard[data-id="the-challenge"]');
     check('Confirm button names the chosen race', (await text(page, '#suConfirm')).includes('I am running The Challenge'));
@@ -94,6 +96,25 @@ try {
     await page.click('#suConfirm');
     await page.waitForFunction(() => !document.getElementById('setup').classList.contains('open'));
     check('Change race confirms and returns to the map', (await text(page, '#raceChip')).startsWith('The Challenge'));
+    // Switch to the Ultra: its checkpoints show, and the next one is named.
+    await page.click('#menuBtn'); await page.waitForTimeout(300);
+    await page.click('#changeRaceBtn');
+    await page.waitForSelector('.racecard');
+    await page.click('.racecard[data-id="the-ultra"]');
+    await page.click('#suConfirm');
+    await page.waitForFunction(() => course && course.info && course.info.id === 'the-ultra');
+    check('Switched to The Ultra', (await text(page, '#raceChip')) === 'The Ultra · 52.5 km', await text(page, '#raceChip'));
+    check('Ultra checkpoints on the map (water and stations)', await page.evaluate(() =>
+      document.querySelectorAll('.lbl.cp-water').length >= 17 && document.querySelectorAll('.lbl.cp-station').length === 2));
+    const start = await page.evaluate(() => course.pts[5]);
+    await fakeFix(page, { latitude: start[0], longitude: start[1] });
+    check('Next checkpoint is named with its symbol', (await text(page, '#courseNext')).startsWith('Next: 💧 Water'), await text(page, '#courseNext'));
+    await page.evaluate(() => fitArea(L.latLngBounds(course.pts.map(p => [p[0], p[1]]))));
+    await page.waitForTimeout(1200);
+    await shot(page, '10-ultra');
+    // While GPS is still searching, a spinner and a running count show it is working.
+    await page.evaluate(() => { gps.fix = null; gps.state = 'searching'; gps.searchSince = Date.now() - 7000; renderGps(); });
+    check('Searching for GPS shows a spinner and seconds', await page.locator('#gpsBadges .spin').count() === 1 && (await text(page, '#gpsBadges')).includes('7 s'), await text(page, '#gpsBadges'));
     check('Setup: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
   }

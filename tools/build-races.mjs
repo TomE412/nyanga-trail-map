@@ -3,8 +3,12 @@
 // Output: data/races/index.json (the list) and data/races/<id>.json (the route).
 //
 // Clean-up done here so the app gets tidy data:
-// - waypoints that are just copies of route points (Garmin exports these) are
-//   dropped; real checkpoints are waypoints that do not sit on a route point
+// - waypoints that are just copies of route points (Garmin exports these, as
+//   long numbered series such as "The Epic 2025 001") are dropped; the named
+//   ones left are real checkpoints (water, stations, landmarks)
+// - checkpoints from every file are shared: a race gets each checkpoint that
+//   lies within 100 m of its own route, since routes share sections (a race
+//   always keeps the checkpoints from its own file, even off-trail ones)
 // - missing heights (or all zero, as in drawn routes) are filled from the
 //   Copernicus 30 m elevation data in tools/data/
 // Usage: node tools/build-races.mjs
@@ -38,6 +42,36 @@ const metres = (a, b) => {
 };
 const tag = (s, t) => { const m = s.match(new RegExp(`<${t}>([\\s\\S]*?)</${t}>`)); return m ? m[1].trim() : null; };
 
+// Checkpoints from every race file. A numbered series with more than 20
+// members is an export of route points, not checkpoints.
+const allCheckpoints = [];
+for (const race of races) {
+  const xml = readFileSync(`races/${race.file}`, 'utf8');
+  const w = [...xml.matchAll(/<wpt\s[^>]*?lat="([-\d.]+)"[^>]*?lon="([-\d.]+)"[^>]*>([\s\S]*?)<\/wpt>/g)]
+    .map(m => ({ lat: +m[1], lon: +m[2], name: tag(m[3], 'name') || 'Checkpoint' }));
+  const series = name => name.replace(/[-\s]\d+$/, '');
+  const count = {};
+  w.forEach(q => { count[series(q.name)] = (count[series(q.name)] || 0) + 1; });
+  for (const q of w.filter(q => count[series(q.name)] <= 20)) {
+    if (allCheckpoints.some(c => c.source === q.name && metres([c.lat, c.lon], [q.lat, q.lon]) < 30)) continue;
+    const name = q.name.replace(/([A-Za-z])(\d+)$/, '$1 $2');
+    const kind = /water/i.test(name) ? 'water' : /station|aid|checkpoint|\bcp\b/i.test(name) ? 'station' : 'point';
+    allCheckpoints.push({ lat: +q.lat.toFixed(6), lon: +q.lon.toFixed(6), name, kind, source: q.name, race: race.id });
+  }
+}
+// Shortest distance from a point to a route line, in metres.
+function distanceToRoute(pts, lat, lon) {
+  const k = 111320 * Math.cos(lat * Math.PI / 180), px = lon * k, py = lat * 110574;
+  let best = Infinity;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const ax = pts[i][1] * k, ay = pts[i][0] * 110574, bx = pts[i + 1][1] * k, by = pts[i + 1][0] * 110574;
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+    const t = l2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2)) : 0;
+    best = Math.min(best, Math.hypot(px - ax - t * dx, py - ay - t * dy));
+  }
+  return best;
+}
+
 const index = [];
 for (const race of races) {
   const xml = readFileSync(`races/${race.file}`, 'utf8');
@@ -51,9 +85,8 @@ for (const race of races) {
   if (heightsMissing) pts = pts.map(([lat, lon]) => [lat, lon, elevation(lat, lon)]);
   pts = pts.map(([lat, lon, ele]) => [+lat.toFixed(6), +lon.toFixed(6), ele == null ? null : Math.round(ele)]);
 
-  const wpts = [...xml.matchAll(/<wpt\s[^>]*?lat="([-\d.]+)"[^>]*?lon="([-\d.]+)"[^>]*>([\s\S]*?)<\/wpt>/g)]
-    .map(m => ({ lat: +m[1], lon: +m[2], name: tag(m[3], 'name') || 'Checkpoint' }))
-    .filter(w => !pts.some(p => metres(p, [w.lat, w.lon]) < 2));
+  const wpts = allCheckpoints.filter(c => c.race === race.id || distanceToRoute(pts, c.lat, c.lon) <= 100)
+    .map(({ lat, lon, name, kind }) => ({ lat, lon, name, kind }));
 
   let dist = 0, climb = 0, ref = pts[0][2];
   for (let i = 1; i < pts.length; i++) {

@@ -173,6 +173,11 @@
   .check.warn { background: #fff3e0; color: var(--amber); }
   .warnbox { background: #fff3e0; }
 
+  /* Loading wheel */
+  .spin { display: inline-block; width: 13px; height: 13px; margin-right: 6px; vertical-align: -2px; border-radius: 50%;
+    border: 2px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
   /* Map labels */
   .lbl { white-space: nowrap; font-size: 11px; font-weight: 600; color: #3b2a1a;
     text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 3px #fff; transform: translate(-50%, -50%); position: absolute; }
@@ -180,6 +185,11 @@
   .lbl.peak::before { content: "▲ "; color: #5d4037; }
   .lbl.km { font-size: 10px; color: #fff; background: #e65100; border-radius: 8px; padding: 0 4px; text-shadow: none; }
   .lbl.wpt { font-size: 11px; color: #fff; background: #6a1b9a; border-radius: 8px; padding: 1px 6px; text-shadow: none; }
+  .lbl.cp-water { background: #0d6ebd; }
+  .lbl.cp-station { background: #6a1b9a; font-size: 12px; }
+  .lbl.cp-point { background: #455a64; }
+  .zoom-mid .lbl.cp-water .nm, .zoom-mid .lbl.cp-point .nm { display: none; }
+  .zoom-lo .lbl.cp-water, .zoom-lo .lbl.cp-point { display: none; }
   .lbl.arrow { font-size: 13px; color: #e65100; text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 3px #fff; }
   .zoom-lo .lbl.minor, .zoom-lo .lbl.km, .zoom-lo .lbl.arrow { display: none; }
   .leaflet-control-attribution { font-size: 9px; }

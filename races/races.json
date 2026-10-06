@@ -5,6 +5,22 @@
     "file": "the-challenge.gpx",
     "version": 1,
     "start": "",
-    "notes": "Test route from The Challenge 2026.gpx (Garmin Desktop, drawn route). Direction taken as drawn: Eucalyptus Trees to the east."
+    "notes": "From The Challenge 2026.gpx. Starts at Golden Pools, finishes in the east (same finish as the other races)."
+  },
+  {
+    "id": "the-ultra",
+    "name": "The Ultra",
+    "file": "the-ultra.gpx",
+    "version": 1,
+    "start": "",
+    "notes": "From Ultra 2026.gpx. Starts in the south, north to Golden Pools, then the Challenge route to the finish. The file's water points and stations are the checkpoints."
+  },
+  {
+    "id": "the-epic",
+    "name": "The Epic",
+    "file": "the-epic.gpx",
+    "version": 1,
+    "start": "",
+    "notes": "From The Epic 2026.gpx. Same start as the Ultra, with a long loop west through the national park before Golden Pools."
   }
 ]
