@@ -1,13 +1,13 @@
 // Cuts the Far and Wide "Turaco Trail" GeoTIFF (EPSG:4326, ~2 m/px) into
-// 256px WebP web-map tiles in tiles-turaco/{z}/{x}/{y}.webp.
+// 256px WebP web-map tiles in <output folder>/{z}/{x}/{y}.webp.
 // The white paper margin around the printed map is detected and left out, and
 // pixels outside the map are transparent so the contour map shows through.
-// Usage: node tools/render-turaco.mjs "path/to/TuracoTrail 2025 geo.tif"
+// Usage: node --max-old-space-size=6144 tools/render-turaco.mjs "path/to/TuracoTrail 2026 geo.tiff" tiles-turaco26
 import { fromFile } from 'geotiff';
 import { createCanvas } from '@napi-rs/canvas';
 import { mkdirSync, writeFileSync } from 'node:fs';
 
-const MIN_ZOOM = 11, MAX_ZOOM = 16, OUT = 'tiles-turaco';
+const MIN_ZOOM = 11, MAX_ZOOM = 16, OUT = process.argv[3] || 'tiles-turaco';
 const img = await (await fromFile(process.argv[2])).getImage();
 const W = img.getWidth(), H = img.getHeight();
 const [west, south, east, north] = img.getBoundingBox();
@@ -16,7 +16,9 @@ console.log(`reading ${W}x${H} image…`);
 const px = await img.readRasters({ interleave: true });
 
 // Find the printed map's edge on each side: the first line, coming in from the
-// paper edge, where most pixels in a sample band are not white.
+// paper edge, where most pixels in a sample band are not white. Several bands
+// are tried per side and the outermost edge wins, because the printed map is
+// not always a rectangle (corners can be cut away).
 const isInk = i => !(px[i] > 235 && px[i + 1] > 235 && px[i + 2] > 220);
 function edge(fromEnd, vertical, bandStart, bandLen) {
   const n = vertical ? W : H;
@@ -28,9 +30,14 @@ function edge(fromEnd, vertical, bandStart, bandLen) {
   }
   return fromEnd ? n - 1 : 0;
 }
-const band = (f, len) => [Math.floor(f), len];
-const left = edge(false, true, ...band(H * 0.2, 400)), right = edge(true, true, ...band(H * 0.2, 400));
-const top = edge(false, false, ...band(W * 0.2, 400)), bottom = edge(true, false, ...band(W * 0.1, 400));
+const BANDS = [0.1, 0.25, 0.4, 0.55, 0.7, 0.85];
+const outer = (fromEnd, vertical) => {
+  const n = vertical ? H : W;
+  const found = BANDS.map(f => edge(fromEnd, vertical, Math.floor(n * f), 400));
+  return fromEnd ? Math.max(...found) : Math.min(...found);
+};
+const left = outer(false, true), right = outer(true, true);
+const top = outer(false, false), bottom = outer(true, false);
 console.log(`printed map area: x ${left}-${right}, y ${top}-${bottom}`);
 
 function sample(lon, lat, out, o) {

@@ -152,10 +152,14 @@ try {
   // ------------------------------------------------------------------
   // Offline download, then full reload with the internet off
   await ctx.setGeolocation({ ...EDDY, accuracy: 8 });
+  // Pretend this phone still has a piece of an older race map saved.
+  await page.evaluate(async () => (await caches.open(TILE_CACHE)).put('tiles-turaco/16/1/1.webp', new Response('old')));
   await page.evaluate(() => openSheet()); await page.waitForTimeout(300);
   await page.click('#dlBtn');
   await page.waitForFunction(() => /saved on this phone|missing|failed/.test(document.getElementById('dlText').textContent), null, { timeout: 180000 });
   check('Map download (both maps) verified', (await text(page, '#dlText')).includes('saved on this phone'), await text(page, '#dlText'));
+  check('Old race map pieces removed after download', await page.evaluate(async () => !(await (await caches.open(TILE_CACHE)).match('tiles-turaco/16/1/1.webp'))));
+  check('Race map is the 2026 version', await page.evaluate(() => raceLayer._url.includes('turaco26') && raceBounds.contains([-18.50, 32.72])));
   await page.click('#closeSheet'); await page.waitForTimeout(300);
 
   await ctx.setOffline(true);

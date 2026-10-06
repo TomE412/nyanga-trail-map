@@ -10,13 +10,13 @@ course (GPX) with distance done/to go and an off-course warning; works in
 airplane mode once downloaded.
 
 ## How runners use it
-1. Open the site on wifi and tap **☰ → Download map for offline** (about 55 MB).
+1. Open the site on wifi and tap **☰ → Download map for offline** (about 75 MB).
 2. Optionally load the course with **Load course (GPX file)**.
 3. Add it to the home screen. It then works in airplane mode.
 
 ## Rebuilding the map (computer only)
 - `npm run osm`: refresh paths and place names from OpenStreetMap
-- `node --max-old-space-size=4096 tools/render-turaco.mjs "path/TuracoTrail 2025 geo.tif"`: re-cut the race map
+- `node --max-old-space-size=6144 tools/render-turaco.mjs "path/TuracoTrail 2026 geo.tiff" tiles-turaco26`: re-cut the race map. For a new map version use a new folder name, then update `TILE_SETS`, the race layer URL and `RACE_BBOX` in `app.js` and the index path in `sw.js`
 - `npm run tiles`: redraw the contour map. This needs the Copernicus elevation file in
   `tools/data/` (see `tools/render-tiles.mjs`)
 - `npm test`: browser tests: GPS states, recording and recovery, export, course, offline
@@ -28,7 +28,7 @@ existing pieces were redrawn, also bump `TILE_CACHE` (app.js) and `TILES` (sw.js
 Warning thresholds (stale seconds, poor accuracy and so on) are in `CONFIG` at the top of `app.js`.
 
 ## Credits
-Race map: Wild Nyanga Map, The Turaco Trail © Far and Wide.
+Race map: Wild Nyanga Map, The Turaco Trail 2026 © Far and Wide.
 Elevation: Copernicus DEM GLO-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH
 2014-2018, provided under COPERNICUS by the European Union and ESA.
 Paths and names © OpenStreetMap contributors (ODbL). Map library: Leaflet.

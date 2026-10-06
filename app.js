@@ -1,14 +1,14 @@
 // Nyanga Trail Map: offline race map with live GPS, run recording and course.
 // Keep APP_VERSION in step with SHELL in sw.js.
-const APP_VERSION = 'v3 (4 Oct 2026)';
+const APP_VERSION = 'v4 (6 Oct 2026)';
 const TILE_CACHE = 'tiles-v2';
 // Bump when a tile set is added or redrawn, so phones know to download again.
-const TILES_TAG = 'contours2+turaco3';
-const TILE_SETS = ['tiles', 'tiles-turaco'];
+const TILES_TAG = 'contours2+turaco2026';
+const TILE_SETS = ['tiles', 'tiles-turaco26'];
 const BBOX = { west: 32.62, east: 32.98, south: -18.42, north: -18.08 };
-// Far and Wide "Turaco Trail" race map, bounds read from its GeoTIFF.
-const RACE_BBOX = { west: 32.770237886116384, east: 32.99270592722873, south: -18.476174967869852, north: -18.264234107572427 };
-const RACE_SOURCE_SHA256 = '85700aa5fa750407385c07cce589dcc9b6c0361ad4c2e24a623d1c28b21e0c91';
+// Far and Wide "Turaco Trail 2026" race map, bounds read from its GeoTIFF.
+const RACE_BBOX = { west: 32.69659612566003, east: 32.992700072259964, south: -18.523914235060392, north: -18.215629827297686 };
+const RACE_SOURCE_SHA256 = '2c0463b6ffde958bc8a0b5489d04023cbd628d08b432fdc2262097592d4b9aac';
 
 // Thresholds for GPS warnings and recording. Change here, not in the code below.
 const CONFIG = {
@@ -41,10 +41,12 @@ const contourBounds = L.latLngBounds([BBOX.south, BBOX.west], [BBOX.north, BBOX.
 const raceBounds = L.latLngBounds([RACE_BBOX.south, RACE_BBOX.west], [RACE_BBOX.north, RACE_BBOX.east]);
 const bounds = L.latLngBounds(contourBounds.getSouthWest(), contourBounds.getNorthEast()).extend(raceBounds);
 const map = L.map('map', {
-  preferCanvas: true, zoomControl: false, minZoom: 11, maxZoom: 18,
+  preferCanvas: true, zoomControl: false, minZoom: 10, maxZoom: 18,
   maxBounds: bounds.pad(0.3), maxBoundsViscosity: 0.8,
 });
-map.fitBounds(raceBounds);
+// Fit an area into the part of the screen not covered by the top bar and bottom panel.
+const fitArea = b => map.fitBounds(b, { paddingTopLeft: [10, 60], paddingBottomRight: [10, (document.getElementById('panel').offsetHeight || 120) + 16] });
+fitArea(raceBounds);
 try {
   const v = JSON.parse(pref('view'));
   if (v) map.setView(v.c, v.z);
@@ -52,11 +54,11 @@ try {
 map.on('moveend', () => pref('view', JSON.stringify({ c: map.getCenter(), z: map.getZoom() })));
 
 L.tileLayer('tiles/{z}/{x}/{y}.webp', {
-  minZoom: 11, maxZoom: 18, maxNativeZoom: 16, bounds: contourBounds,
+  minZoom: 10, maxZoom: 18, minNativeZoom: 11, maxNativeZoom: 16, bounds: contourBounds,
   attribution: '© OpenStreetMap contributors · Copernicus DEM',
 }).addTo(map);
-const raceLayer = L.tileLayer('tiles-turaco/{z}/{x}/{y}.webp', {
-  minZoom: 11, maxZoom: 18, maxNativeZoom: 16, bounds: raceBounds,
+const raceLayer = L.tileLayer('tiles-turaco26/{z}/{x}/{y}.webp', {
+  minZoom: 10, maxZoom: 18, minNativeZoom: 11, maxNativeZoom: 16, bounds: raceBounds,
   attribution: 'Race map © Far and Wide',
 });
 L.control.scale({ imperial: false, position: 'topleft' }).addTo(map);
@@ -108,7 +110,7 @@ fetch('data/osm.geojson').then(r => r.json()).then(gj => {
 // Map buttons
 $('zoomInBtn').onclick = () => map.zoomIn();
 $('zoomOutBtn').onclick = () => map.zoomOut();
-$('fitBtn').onclick = () => { setFollow(false); map.fitBounds(raceOn ? raceBounds : bounds); };
+$('fitBtn').onclick = () => { setFollow(false); fitArea(raceOn ? raceBounds : bounds); };
 
 // =====================================================================
 // GPS
@@ -683,6 +685,13 @@ $('dlBtn').onclick = async () => {
     if (failed || missing) {
       text.textContent = `${Math.max(failed, missing)} pieces are missing. Check your connection and tap the button again; it carries on where it stopped.`;
     } else {
+      // Free the space used by pieces of older maps that are no longer used.
+      // A piece is identified by "<set>/<z>/<x>/<y>.webp", the last 4 parts of its address.
+      const wanted = new Set(urls.map(u => u.split('/').slice(-4).join('/')));
+      for (const req of await cache.keys()) {
+        const key = new URL(req.url).pathname.split('/').slice(-4).join('/');
+        if (key.startsWith('tiles') && !wanted.has(key)) await cache.delete(req);
+      }
       pref('tilesSaved', TILES_TAG);
       text.textContent = 'Done. The map is saved on this phone.';
     }
