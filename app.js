@@ -1,6 +1,6 @@
 // Nyanga Trail Map: offline race map with live GPS, run recording and course.
 // Keep APP_VERSION in step with SHELL in sw.js.
-const APP_VERSION = 'v6 (6 Oct 2026)';
+const APP_VERSION = 'v7 (6 Oct 2026)';
 const TILE_CACHE = 'tiles-v2';
 // Bump when a tile set is added or redrawn, so phones know to download again.
 const TILES_TAG = 'turaco2026';
@@ -617,8 +617,9 @@ async function refreshOfflineStatus() {
   $('storageText').textContent = s ? `This app is using ${(s.usage / 1e6).toFixed(0)} MB on this phone.` : '';
 }
 
-$('dlBtn').onclick = async () => {
-  const btn = $('dlBtn'), bar = $('dlProgress'), text = $('dlText');
+// Downloads every map piece, showing progress in the given button, bar and text.
+// Returns true when the whole map is saved on the phone.
+async function downloadMap(btn, bar, text) {
   btn.disabled = true; bar.style.display = 'block';
   try {
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
@@ -671,7 +672,9 @@ $('dlBtn').onclick = async () => {
   }
   btn.disabled = false;
   refreshOfflineStatus();
-};
+  return pref('tilesSaved') === TILES_TAG;
+}
+$('dlBtn').onclick = () => downloadMap($('dlBtn'), $('dlProgress'), $('dlText'));
 
 $('dlDelete').onclick = async () => {
   if (!confirm('Delete the offline map from this phone? You will need internet to download it again. Recordings are kept.')) return;
@@ -683,28 +686,48 @@ $('dlDelete').onclick = async () => {
 };
 
 // =====================================================================
-// Race course (GPX)
+// Race and route: each runner chooses their race at setup, and only that
+// route is shown, so nobody follows another distance's route by mistake.
 // =====================================================================
-// Course points are projected to flat metres; fine at this scale (~40 km).
+// Route points are projected to flat metres; fine at this scale (~40 km).
 const LAT0 = -18.3, KX = 111320 * Math.cos(LAT0 * Math.PI / 180), KY = 110574;
-let course = null, courseLayer = null, lastAlong = null;
+let course = null, courseLayer = null, lastAlong = null, races = [];
+// The runner's details stay on this phone only.
+const profile = (() => { try { return JSON.parse(pref('profile')) || {}; } catch { return {}; } })();
+const saveProfile = () => pref('profile', JSON.stringify(profile));
 
-function parseGpx(text) {
-  const doc = new DOMParser().parseFromString(text, 'application/xml');
-  if (doc.querySelector('parsererror')) throw new Error('This is not a valid GPX file');
-  let pts = [...doc.getElementsByTagName('trkpt')];
-  if (!pts.length) pts = [...doc.getElementsByTagName('rtept')];
-  if (pts.length < 2) throw new Error('No route found in this file');
-  const num = (el, tag) => { const e = el.getElementsByTagName(tag)[0]; return e ? parseFloat(e.textContent) : null; };
-  const name = (doc.getElementsByTagName('name')[0] || {}).textContent || 'Course';
-  return {
-    name: name.trim(),
-    pts: pts.map(p => [+(+p.getAttribute('lat')).toFixed(6), +(+p.getAttribute('lon')).toFixed(6), num(p, 'ele')]),
-    wpts: [...doc.getElementsByTagName('wpt')].map(w => ({
-      lat: +w.getAttribute('lat'), lon: +w.getAttribute('lon'),
-      name: ((w.getElementsByTagName('name')[0] || {}).textContent || 'Point').trim(),
-    })),
-  };
+async function loadRaceList() {
+  if (races.length) return races;
+  const res = await fetch('data/races/index.json');
+  if (!res.ok) throw new Error('race list not available (' + res.status + ')');
+  races = await res.json();
+  return races;
+}
+
+async function showRace(id) {
+  const info = (await loadRaceList()).find(r => r.id === id);
+  if (!info) throw new Error('Your race is no longer in the app. Please choose your race again.');
+  const res = await fetch(info.file);
+  if (!res.ok) throw new Error('route not available (' + res.status + ')');
+  course = prepareCourse(await res.json());
+  course.info = info; lastAlong = null;
+  drawCourse();
+  // Routes ship with the app, so an app update can carry a corrected route.
+  if (profile.raceVersion && profile.raceVersion !== info.version) toast(`Your ${info.name} route has been updated to the latest version.`, 6000);
+  profile.raceVersion = info.version; saveProfile();
+  renderRaceInfo();
+}
+
+function renderRaceInfo() {
+  const info = course && course.info;
+  $('raceChip').textContent = info ? `${info.name} · ${info.distanceKm} km` : 'Choose your race';
+  const rows = [
+    ['Name', profile.name || '-'],
+    ['Bib number', profile.bib || '-'],
+    ['Race', info ? `${info.name}, ${info.distanceKm} km, ${info.climbM} m climb` : 'Not chosen'],
+    ['Route version', info ? String(info.version) : '-'],
+  ];
+  $('raceText').innerHTML = rows.map(([k, v]) => `<div class="row"><span>${escapeHtml(k)}</span><b>${escapeHtml(v)}</b></div>`).join('');
 }
 
 function prepareCourse(c) {
@@ -712,7 +735,7 @@ function prepareCourse(c) {
   const cum = [0];
   for (let i = 1; i < xy.length; i++) cum.push(cum[i - 1] + Math.hypot(xy[i][0] - xy[i - 1][0], xy[i][1] - xy[i - 1][1]));
   // Climb still to come from each point to the finish. Height changes under
-  // 5 m are ignored so GPS wobble in the recorded file doesn't inflate it.
+  // 5 m are ignored so small wobbles in the route's heights don't inflate it.
   const climbLeft = new Array(c.pts.length).fill(0);
   const hasEle = c.pts.every(p => p[2] != null);
   if (hasEle) {
@@ -724,12 +747,12 @@ function prepareCourse(c) {
     }
   }
   const prepared = { ...c, xy, cum, total: cum[cum.length - 1], climbLeft, hasEle };
-  prepared.wpts = c.wpts.map(w => ({ ...w, along: nearestOnCourse(prepared, w.lat, w.lon).along }))
+  prepared.wpts = (c.wpts || []).map(w => ({ ...w, along: nearestOnCourse(prepared, w.lat, w.lon).along }))
     .sort((a, b) => a.along - b.along);
   return prepared;
 }
 
-// Finds the closest point on the course. Where the course passes the same
+// Finds the closest point on the route. Where the route passes the same
 // spot twice, prefer the pass closest to where the runner was last seen.
 function nearestOnCourse(c, lat, lon, prevAlong = null) {
   const px = lon * KX, py = lat * KY;
@@ -752,6 +775,16 @@ function nearestOnCourse(c, lat, lon, prevAlong = null) {
 
 const km = m => (m / 1000).toFixed(m < 10000 ? 2 : 1) + ' km';
 
+// A point (and the direction of travel there) a given distance along the route.
+function alongPoint(dist) {
+  let i = 0;
+  while (i < course.cum.length - 2 && course.cum[i + 1] < dist) i++;
+  const seg = course.cum[i + 1] - course.cum[i], t = seg ? (dist - course.cum[i]) / seg : 0;
+  const [a, b] = [course.pts[i], course.pts[i + 1]];
+  const bearing = (Math.atan2(course.xy[i + 1][0] - course.xy[i][0], course.xy[i + 1][1] - course.xy[i][1]) * 180 / Math.PI + 360) % 360;
+  return { lat: a[0] + t * (b[0] - a[0]), lon: a[1] + t * (b[1] - a[1]), bearing };
+}
+
 function drawCourse() {
   if (courseLayer) courseLayer.remove();
   if (!course) return;
@@ -760,21 +793,21 @@ function drawCourse() {
     L.polyline(ll, { color: '#fff', weight: 7, opacity: 0.9, interactive: false }),
     L.polyline(ll, { color: '#e65100', weight: 4, interactive: false }),
   ]);
-  for (let k = 1000, i = 0; k < course.total; k += 1000) {
-    while (course.cum[i + 1] < k) i++;
-    const t = (k - course.cum[i]) / (course.cum[i + 1] - course.cum[i]);
-    const lat = ll[i][0] + t * (ll[i + 1][0] - ll[i][0]), lon = ll[i][1] + t * (ll[i + 1][1] - ll[i][1]);
-    courseLayer.addLayer(L.marker([lat, lon], { icon: label(String(k / 1000), 'km'), interactive: false }));
+  // Direction arrows every 400 m, so loops and out-and-backs are clear.
+  for (let d = 200; d < course.total; d += 400) {
+    if (d % 1000 < 150 || d % 1000 > 850) continue; // keep clear of km markers
+    const p = alongPoint(d);
+    courseLayer.addLayer(L.marker([p.lat, p.lon], { interactive: false, icon: L.divIcon({ className: '', iconSize: [0, 0],
+      html: `<div class="lbl arrow" style="transform: translate(-50%, -50%) rotate(${p.bearing.toFixed(0)}deg)">▲</div>` }) }));
+  }
+  for (let k = 1000; k < course.total; k += 1000) {
+    const p = alongPoint(k);
+    courseLayer.addLayer(L.marker([p.lat, p.lon], { icon: label(String(k / 1000), 'km'), interactive: false }));
   }
   courseLayer.addLayer(L.marker(ll[0], { icon: label('START', 'wpt'), interactive: false }));
   courseLayer.addLayer(L.marker(ll[ll.length - 1], { icon: label('FINISH', 'wpt'), interactive: false }));
   for (const w of course.wpts) courseLayer.addLayer(L.marker([w.lat, w.lon], { icon: label(escapeHtml(w.name), 'wpt'), interactive: false }));
   courseLayer.addTo(map);
-
-  $('courseText').textContent = `${course.name}: ${km(course.total)}` +
-    (course.hasEle ? `, ${Math.round(course.climbLeft[0])} m of climbing` : '') +
-    (course.wpts.length ? `, ${course.wpts.length} checkpoints` : '');
-  $('gpxClear').hidden = false;
   $('courseInfo').hidden = false;
   updateCourse();
 }
@@ -783,9 +816,10 @@ function updateCourse() {
   if (!course) return;
   const f = gps.fix;
   if (!f) {
-    $('courseStatus').textContent = 'Course loaded'; $('courseStatus').className = 'course-status';
-    $('courseDone').textContent = `Total ${km(course.total)}`;
-    $('courseLeft').textContent = ''; $('courseDir').textContent = ''; $('courseNext').textContent = '';
+    $('courseStatus').textContent = course.info ? course.info.name : 'Route loaded'; $('courseStatus').className = 'course-status';
+    $('courseDone').textContent = `Total ${course.info ? course.info.distanceKm + ' km' : km(course.total)}`;
+    $('courseLeft').textContent = course.hasEle ? `${Math.round(course.climbLeft[0])} m climb` : '';
+    $('courseDir').textContent = ''; $('courseNext').textContent = '';
     return;
   }
   const n = nearestOnCourse(course, f.lat, f.lon, lastAlong);
@@ -793,9 +827,9 @@ function updateCourse() {
   const onCourse = n.d <= tolerance;
   if (onCourse) lastAlong = n.along;
   const st = $('courseStatus');
-  st.textContent = onCourse ? '✓ On course' : `⚠ ${Math.round(n.d)} m off course`;
+  st.textContent = onCourse ? '✓ On your route' : `⚠ ${Math.round(n.d)} m off your route`;
   st.className = 'course-status ' + (onCourse ? 'ok' : 'off');
-  $('courseDir').textContent = onCourse ? '' : `Course is ${compassPoint(n.bearing)} of you`;
+  $('courseDir').textContent = onCourse ? '' : `Your route is ${compassPoint(n.bearing)} of you`;
   $('courseDone').textContent = `${km(n.along)} done`;
   const climb = course.hasEle ? ` · ${Math.round(course.climbLeft[n.i])} m climb left` : '';
   $('courseLeft').textContent = `${km(course.total - n.along)} to go${climb}`;
@@ -803,29 +837,169 @@ function updateCourse() {
   $('courseNext').textContent = next ? `Next: ${next.name} in ${km(next.along - n.along)}` : '';
 }
 
-$('gpxBtn').onclick = () => $('gpxInput').click();
-$('gpxInput').onchange = async e => {
-  const file = e.target.files[0];
-  if (!file) return;
-  try {
-    const raw = parseGpx(await file.text());
-    course = prepareCourse(raw); lastAlong = null;
-    pref('course', JSON.stringify(raw));
-    drawCourse();
-    setFollow(false);
-    map.fitBounds(L.latLngBounds(course.pts.map(p => [p[0], p[1]])), { padding: [30, 30] });
+// ---------- First-time setup ----------
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+
+const setup = {
+  step: 'welcome', picked: null, changing: false,
+
+  open(step = 'welcome', changing = false) {
+    Object.assign(this, { step, changing, picked: changing ? null : this.picked });
     closeSheet();
-  } catch (err) {
-    alert('Could not load course: ' + (err.message || err));
-  }
-  e.target.value = '';
+    $('setup').classList.add('open');
+    this.render();
+  },
+  close() { $('setup').classList.remove('open'); },
+  go(step) { this.step = step; this.render(); $('setupBody').scrollTo({ top: 0 }); },
+
+  async finish() {
+    profile.setupDone = true;
+    profile.raceId = this.picked;
+    saveProfile();
+    this.close();
+    try {
+      await showRace(profile.raceId);
+      setFollow(false);
+      fitArea(L.latLngBounds(course.pts.map(p => [p[0], p[1]])));
+    } catch (err) { alert(err.message || err); }
+  },
+
+  render() {
+    const b = $('setupBody'), steps = ['welcome', 'details', 'race', 'map', 'location', 'ready'];
+    $('setupStep').textContent = this.changing ? '' : `Step ${steps.indexOf(this.step) + 1} of ${steps.length}`;
+    const html = this[this.step]();
+    b.innerHTML = html;
+    if (this['wire_' + this.step]) this['wire_' + this.step]();
+  },
+
+  welcome() {
+    const iphoneWarning = isIOS && !isStandalone ? `
+      <div class="note warnbox"><b>iPhone: add to Home Screen first.</b> Tap the Share button, then <b>Add to Home Screen</b>.
+      Close Safari and open the app from the new icon, then set up there. Anything set up here in Safari does not carry over to the icon.</div>` : '';
+    return `<h2>Welcome to the SkyRun 2026 trail map</h2>
+      <p>This app shows your position and your race route on the official race map, with no phone signal needed.</p>
+      <p>Setup takes about 3 minutes. <b>Use wifi</b>: the map download is about 42 MB.</p>${iphoneWarning}
+      <button class="btn" data-go="details">${isIOS && !isStandalone ? 'Set up in Safari anyway' : 'Start'}</button>`;
+  },
+  wire_welcome() { $('setupBody').querySelector('[data-go]').onclick = () => this.go('details'); },
+
+  details() {
+    return `<h2>Your details</h2>
+      <p class="small">Saved only on this phone. Used on your recordings and, later, in emergency messages.</p>
+      <label class="field">Your name<input id="suName" autocomplete="name" value="${escapeHtml(profile.name || '')}"></label>
+      <label class="field">Bib number (optional)<input id="suBib" inputmode="numeric" value="${escapeHtml(profile.bib || '')}"></label>
+      <button class="btn" id="suNext">${this.changing ? 'Save' : 'Next'}</button>
+      ${this.changing ? '<button class="btn secondary" id="suCancel">Cancel</button>' : '<button class="btn secondary" id="suBack">Back</button>'}`;
+  },
+  wire_details() {
+    const name = $('suName'), next = $('suNext');
+    const check = () => { next.disabled = !name.value.trim(); };
+    name.oninput = check; check();
+    next.onclick = () => {
+      profile.name = name.value.trim(); profile.bib = $('suBib').value.trim(); saveProfile();
+      if (this.changing) { this.close(); renderRaceInfo(); toast('Details saved.'); } else this.go('race');
+    };
+    if ($('suBack')) $('suBack').onclick = () => this.go('welcome');
+    if ($('suCancel')) $('suCancel').onclick = () => this.close();
+  },
+
+  race() {
+    return `<h2>Choose your race</h2>
+      <p class="small">Only your race's route will be shown on the map. Check you pick the distance you entered.</p>
+      <div id="raceCards">Loading races…</div>
+      <button class="btn" id="suConfirm" disabled>Choose a race above</button>
+      <button class="btn secondary" id="suBack">${this.changing ? 'Cancel' : 'Back'}</button>`;
+  },
+  async wire_race() {
+    $('suBack').onclick = () => (this.changing ? this.close() : this.go('details'));
+    let list;
+    try { list = await loadRaceList(); }
+    catch (err) { $('raceCards').textContent = 'Could not load the races: ' + (err.message || err) + '. Connect to the internet and try again.'; return; }
+    const card = r => `<button class="racecard${this.picked === r.id ? ' picked' : ''}" data-id="${escapeHtml(r.id)}">
+      <b>${escapeHtml(r.name)}</b><span>${r.distanceKm} km · ${r.climbM} m climb${r.start ? ' · start ' + escapeHtml(r.start) : ''}${r.checkpoints ? ` · ${r.checkpoints} checkpoints` : ''}</span></button>`;
+    $('raceCards').innerHTML = list.map(card).join('');
+    const confirmBtn = $('suConfirm');
+    const update = () => {
+      const r = list.find(x => x.id === this.picked);
+      confirmBtn.disabled = !r;
+      confirmBtn.textContent = r ? `I am running ${r.name} (${r.distanceKm} km)` : 'Choose a race above';
+      $('raceCards').querySelectorAll('.racecard').forEach(el => el.classList.toggle('picked', el.dataset.id === this.picked));
+    };
+    $('raceCards').onclick = e => { const el = e.target.closest('.racecard'); if (el) { this.picked = el.dataset.id; update(); } };
+    update();
+    confirmBtn.onclick = () => {
+      if (this.changing) {
+        const r = list.find(x => x.id === this.picked);
+        if (confirm(`Change your race to ${r.name} (${r.distanceKm} km)? Only that route will be shown.`)) this.finish();
+      } else this.go('map');
+    };
+  },
+
+  map() {
+    const saved = pref('tilesSaved') === TILES_TAG;
+    return `<h2>Save the map on your phone</h2>
+      <p>The map must be saved on your phone so it works on the mountain with no signal.</p>
+      <div class="small" id="suDlText">${saved ? 'The map is already saved on this phone ✓' : 'About 42 MB. Use wifi.'}</div>
+      <div class="progress" id="suDlBar"><div></div></div>
+      ${saved ? '' : '<button class="btn" id="suDl">Download the map</button>'}
+      <button class="btn${saved ? '' : ' secondary'}" id="suNext"${saved ? '' : ' hidden'}>Next</button>
+      ${saved ? '' : '<button class="linkbtn" id="suSkip">Skip for now (not recommended)</button>'}`;
+  },
+  wire_map() {
+    $('suNext').onclick = () => this.go('location');
+    if ($('suSkip')) $('suSkip').onclick = () => {
+      if (confirm('Without the saved map, the app will not work on the mountain. You can download it later from the menu. Skip for now?')) this.go('location');
+    };
+    if ($('suDl')) $('suDl').onclick = async () => {
+      const ok = await downloadMap($('suDl'), $('suDlBar'), $('suDlText'));
+      if (ok) { $('suDl').hidden = true; $('suSkip').hidden = true; const n = $('suNext'); n.hidden = false; n.classList.remove('secondary'); }
+    };
+  },
+
+  location() {
+    return `<h2>Allow your location</h2>
+      <p>The app uses your phone's GPS to show where you are. GPS works without signal. Your location never leaves your phone.</p>
+      <div class="small" id="suGps"></div>
+      <button class="btn" id="suGpsBtn">Allow location</button>
+      <button class="btn secondary" id="suNext">Next</button>`;
+  },
+  wire_location() {
+    $('suGpsBtn').onclick = () => startGps();
+    $('suNext').onclick = () => this.go('ready');
+    this.tick();
+  },
+  // Called every second while setup is open, to show live GPS status.
+  tick() {
+    const el = document.getElementById('suGps');
+    if (!el || this.step !== 'location') return;
+    el.textContent = gps.state === 'denied' ? '✕ Location is blocked. You can allow it later in your phone settings; see Details on the map screen.'
+      : gps.fix ? `✓ Location found (±${Math.round(gps.fix.acc)} m)`
+      : gps.state === 'searching' ? '… Looking for GPS. This can take a minute; you can carry on meanwhile.'
+      : 'Tap "Allow location" and accept when your phone asks.';
+  },
+
+  ready() {
+    const r = races.find(x => x.id === this.picked);
+    const row = (ok, text) => `<div class="check ${ok ? 'ok' : 'warn'}">${ok ? '✓' : '⚠'} ${text}</div>`;
+    return `<h2>Ready to race</h2>
+      ${row(!!profile.name, `Name: ${escapeHtml(profile.name || 'not given')}${profile.bib ? ', bib ' + escapeHtml(profile.bib) : ''}`)}
+      ${row(!!r, r ? `Race: ${escapeHtml(r.name)}, ${r.distanceKm} km` : 'No race chosen')}
+      ${row(pref('tilesSaved') === TILES_TAG, pref('tilesSaved') === TILES_TAG ? 'Map saved for offline use' : 'Map NOT saved: download it from the menu before the race')}
+      ${row(!!gps.fix, gps.fix ? 'Location working' : 'Location not found yet: it will keep looking')}
+      <p class="small">Keep the app open on screen while you run. It is a navigation aid: follow the course markings and marshals.</p>
+      <button class="btn" id="suDone">Open my map</button>
+      <button class="btn secondary" id="suBack">Back</button>`;
+  },
+  wire_ready() {
+    $('suDone').onclick = () => this.finish();
+    $('suBack').onclick = () => this.go('location');
+  },
 };
-$('gpxClear').onclick = () => {
-  course = null; lastAlong = null; drawCourse();
-  try { localStorage.removeItem('course'); } catch {}
-  $('courseText').textContent = 'No course loaded. Load the GPX file of the route.';
-  $('gpxClear').hidden = true; $('courseInfo').hidden = true;
-};
+
+$('changeRaceBtn').onclick = () => setup.open('race', true);
+$('editDetailsBtn').onclick = () => setup.open('details', true);
+$('raceChip').onclick = () => openSheet();
 
 // =====================================================================
 // Screen wake lock, debug overlay, menu
@@ -918,10 +1092,13 @@ fitButtons();
 // =====================================================================
 // Start up: local data only, never waits on the network
 // =====================================================================
-try {
-  const saved = pref('course');
-  if (saved) { course = prepareCourse(JSON.parse(saved)); drawCourse(); }
-} catch (err) { console.warn('Saved course unreadable', err); }
+try { localStorage.removeItem('course'); } catch {} // courses loaded by hand in earlier versions
+renderRaceInfo();
+if (profile.setupDone && profile.raceId) {
+  showRace(profile.raceId).catch(err => { toast(err.message || String(err), 6000); setup.open('race', true); });
+} else {
+  setup.open('welcome');
+}
 if (pref('tilesSaved') === 'contours2+turaco2026') pref('tilesSaved', TILES_TAG);
 removeOldTiles();
 refreshOfflineStatus();
@@ -930,7 +1107,7 @@ if (pref('debug') === '1') { $('debugToggle').checked = true; $('debugToggle').o
 if (pref('gpsOn') === '1') startGps();
 renderGps();
 recorder.recover().catch(err => console.error('Could not check for unfinished recording', err));
-setInterval(() => { renderGps(); renderRec(); renderDebug(); }, 1000);
+setInterval(() => { renderGps(); renderRec(); renderDebug(); setup.tick(); }, 1000);
 
 // =====================================================================
 // Service worker

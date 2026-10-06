@@ -1,11 +1,11 @@
 // Offline worker. Bump SHELL on every release (match APP_VERSION in app.js);
 // that is what makes phones pick up new files. The tile cache is kept across
 // releases so runners don't have to download the map again.
-const SHELL = 'shell-v6';
+const SHELL = 'shell-v7';
 const TILES = 'tiles-v2';
 const CORE = [
   './', 'index.html', 'app.js', 'manifest.json', 'icon-192.png', 'icon-512.png',
-  'vendor/leaflet.js', 'vendor/leaflet.css', 'tiles-turaco26/index.json',
+  'vendor/leaflet.js', 'vendor/leaflet.css', 'tiles-turaco26/index.json', 'data/races/index.json',
   // Medical guide (made by tools/build-medical.mjs); keep in step with data/medical/.
   'data/medical.html', 'data/medical/image1.webp', 'data/medical/image2.webp', 'data/medical/image3.webp',
   'data/medical/image4.webp', 'data/medical/image5.webp', 'data/medical/image6.webp', 'data/medical/image7.webp',
@@ -13,13 +13,21 @@ const CORE = [
 
 self.addEventListener('install', e => {
   self.skipWaiting();
-  e.waitUntil(caches.open(SHELL).then(cache => Promise.all(CORE.map(async url => {
+  e.waitUntil(caches.open(SHELL).then(async cache => {
+    const save = async url => {
+      try {
+        const res = await fetch(url, { cache: 'reload' });
+        if (res.ok) await cache.put(url, res);
+        else console.warn('[sw] skipped', url, res.status);
+      } catch (err) { console.warn('[sw] skipped', url, err.message); }
+    };
+    await Promise.all(CORE.map(save));
+    // Every race route in the race list, so any race can be chosen offline.
     try {
-      const res = await fetch(url, { cache: 'reload' });
-      if (res.ok) await cache.put(url, res);
-      else console.warn('[sw] skipped', url, res.status);
-    } catch (err) { console.warn('[sw] skipped', url, err.message); }
-  }))));
+      const list = await (await cache.match('data/races/index.json')).json();
+      await Promise.all(list.map(r => save(r.file)));
+    } catch (err) { console.warn('[sw] race routes not saved', err.message); }
+  }));
 });
 
 self.addEventListener('activate', e => {

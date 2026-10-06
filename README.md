@@ -18,6 +18,7 @@ airplane mode once downloaded.
 - `npm run osm` and `npm run tiles`: OpenStreetMap paths and a generated contour map. No longer used by the app since v6 (the 2026 race map covers the whole area); kept in case they are needed again
 - `node --max-old-space-size=6144 tools/render-turaco.mjs "path/TuracoTrail 2026 geo.tiff" tiles-turaco26`: re-cut the race map. For a new map version use a new folder name, then update `TILE_SETS`, the race layer URL and `RACE_BBOX` in `app.js` and the index path in `sw.js`
 - `node tools/build-medical.mjs "path/SkyRun 2026 Athlete Medical Guide.docx"`: rebuild the emergency and medical guide (`data/medical.html` + diagrams). If the number of diagrams changes, update the list in `sw.js`
+- **Race routes:** put each race's GPX file in `races/` and list it in `races/races.json` (id, name, file, version, start time). Then run `node tools/build-races.mjs`. It removes Garmin's duplicate waypoints, fills missing heights from the elevation data, and writes `data/races/`. **Raise a race's `version` whenever its route changes**, so runners are told their route was updated. `node tools/route-preview.mjs races/<file>.gpx 15 out.png` draws a route over the race map to check it
 - `npm test`: browser tests: GPS states, recording and recovery, export, course, offline
 - Before race day, do the phone tests in `docs/field-test-checklist.md`
 

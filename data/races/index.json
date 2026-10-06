@@ -1,0 +1,12 @@
+[
+ {
+  "id": "the-challenge",
+  "name": "The Challenge",
+  "version": 1,
+  "start": "",
+  "distanceKm": 28.6,
+  "climbM": 1383,
+  "checkpoints": 0,
+  "file": "data/races/the-challenge.json"
+ }
+]

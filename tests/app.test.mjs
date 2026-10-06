@@ -6,8 +6,9 @@ import { spawn } from 'node:child_process';
 const OUT = process.argv[2] || null;
 const PORT = 8093, URL = `http://localhost:${PORT}/`;
 const EDDY = { latitude: -18.395, longitude: 32.835 };     // on the race map
-const NYANGANI = { latitude: -18.2935, longitude: 32.8335 }; // on the test course
 const HARARE = { latitude: -17.83, longitude: 31.05 };      // far outside
+// A runner who has already been through setup (used unless a test wants a fresh phone).
+const SET_UP = { setupDone: true, raceId: 'the-challenge', name: 'Test Runner', raceVersion: 1 };
 
 const server = spawn(process.execPath, ['tools/serve.mjs', String(PORT)]);
 await new Promise(r => server.stdout.once('data', r));
@@ -16,8 +17,9 @@ let failures = 0;
 const check = (name, ok, detail = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`); if (!ok) failures++; };
 const shot = async (page, name) => { if (OUT) await page.screenshot({ path: `${OUT}/${name}.png` }); };
 
-async function newPage(opts) {
+async function newPage({ fresh = false, ...opts } = {}) {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 800 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, ...opts });
+  if (!fresh) await ctx.addInitScript(p => { if (!localStorage.getItem('profile')) localStorage.setItem('profile', p); }, JSON.stringify(SET_UP));
   const page = await ctx.newPage();
   const errors = [];
   page.on('console', m => m.type() === 'error' && errors.push(m.text()));
@@ -37,6 +39,62 @@ try {
     await page.click('#locateBtn');
     await page.waitForFunction(() => document.getElementById('gpsBadges').textContent.includes('blocked'), null, { timeout: 10000 }).catch(() => {});
     check('Permission denied shows "Location blocked" with instructions', (await text(page, '#gpsBadges')).includes('Location blocked') && (await text(page, '#gpsHint')).includes('Settings'), await text(page, '#gpsBadges'));
+    await ctx.close();
+  }
+
+  // ------------------------------------------------------------------
+  // First-time setup: name, race, map, location
+  {
+    const { ctx, page, errors } = await newPage({ fresh: true, permissions: ['geolocation'], geolocation: { ...EDDY, accuracy: 8 } });
+    await page.goto(URL);
+    check('Fresh install opens setup', await page.locator('#setup').isVisible() && (await text(page, '#setupStep')).includes('Step 1'));
+    await page.click('#setupBody [data-go]');
+    check('Name is required', await page.locator('#suNext').isDisabled());
+    await page.fill('#suName', 'Tendai Moyo');
+    await page.fill('#suBib', '142');
+    await page.click('#suNext');
+    await page.waitForSelector('.racecard');
+    await shot(page, '8-setup-race');
+    check('Race list shows The Challenge', (await text(page, '#raceCards')).includes('The Challenge') && (await text(page, '#raceCards')).includes('28.6 km'), await text(page, '#raceCards'));
+    check('Cannot continue before choosing a race', await page.locator('#suConfirm').isDisabled());
+    await page.click('.racecard[data-id="the-challenge"]');
+    check('Confirm button names the chosen race', (await text(page, '#suConfirm')).includes('I am running The Challenge'));
+    await page.click('#suConfirm');
+    await page.click('#suSkip');
+    await page.click('#suGpsBtn');
+    await page.waitForFunction(() => document.getElementById('suGps').textContent.includes('Location found'));
+    await page.click('#suNext');
+    const ready = await text(page, '#setupBody');
+    check('Ready screen summarises name, bib, race, map and location',
+      ready.includes('Tendai Moyo, bib 142') && ready.includes('Race: The Challenge') && ready.includes('Map NOT saved') && ready.includes('Location working'));
+    await shot(page, '9-setup-ready');
+    await page.click('#suDone');
+    await page.waitForFunction(() => course && course.info && course.info.id === 'the-challenge');
+    check('After setup: only the chosen route is shown, with its name at the top',
+      !(await page.locator('#setup').isVisible()) && (await text(page, '#raceChip')) === 'The Challenge · 28.6 km');
+    check('Route has direction arrows and km markers', await page.evaluate(() => {
+      const els = [...document.querySelectorAll('.lbl')];
+      return els.filter(e => e.classList.contains('arrow')).length > 20 && els.filter(e => e.classList.contains('km')).length === 28;
+    }));
+    const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('profile')));
+    check('Details saved on the phone only', saved.name === 'Tendai Moyo' && saved.bib === '142' && saved.raceId === 'the-challenge');
+    await page.reload();
+    await page.waitForFunction(() => course && course.info);
+    check('After restart: no setup, same race', !(await page.locator('#setup').isVisible()) && (await text(page, '#raceChip')).startsWith('The Challenge'));
+    await page.click('#menuBtn'); await page.waitForTimeout(300);
+    await page.click('#editDetailsBtn');
+    await page.fill('#suBib', '143');
+    await page.click('#suNext');
+    await page.click('#menuBtn'); await page.waitForTimeout(300);
+    check('Edit details from the menu', (await text(page, '#raceText')).includes('143'), await text(page, '#raceText'));
+    await page.click('#changeRaceBtn');
+    await page.waitForSelector('.racecard');
+    check('Change race opens the race list', (await text(page, '#setupBody')).includes('Choose your race'));
+    await page.click('.racecard[data-id="the-challenge"]');
+    await page.click('#suConfirm');
+    await page.waitForFunction(() => !document.getElementById('setup').classList.contains('open'));
+    check('Change race confirms and returns to the map', (await text(page, '#raceChip')).startsWith('The Challenge'));
+    check('Setup: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
   }
 
@@ -159,14 +217,16 @@ try {
   await page.click('#medClose');
 
   // ------------------------------------------------------------------
-  // Course
-  await page.setInputFiles('#gpxInput', 'tests/test-course.gpx');
-  await page.waitForSelector('#courseInfo:not([hidden])');
-  await fakeFix(page, NYANGANI);
-  check('Course: on course near CP1', (await text(page, '#courseStatus')).includes('On course'), `${await text(page, '#courseDone')} | ${await text(page, '#courseNext')}`);
-  await fakeFix(page, { latitude: -18.2900, longitude: 32.8400 });
-  check('Course: off-course warning with direction', (await text(page, '#courseStatus')).includes('off course') && (await text(page, '#courseDir')).includes('SW'), await text(page, '#courseStatus'));
-  await page.evaluate(() => $('gpxClear').click());
+  // The runner's route
+  const onRoute = await page.evaluate(() => course.pts[150]);
+  await fakeFix(page, { latitude: onRoute[0], longitude: onRoute[1] });
+  const done = await text(page, '#courseDone');
+  check('Route: on your route, distance done and to go', (await text(page, '#courseStatus')).includes('On your route') && /\d/.test(done) && (await text(page, '#courseLeft')).includes('to go'),
+    `${done} | ${await text(page, '#courseLeft')}`);
+  await fakeFix(page, { latitude: onRoute[0] + 0.01, longitude: onRoute[1] });
+  check('Route: off-route warning with direction', (await text(page, '#courseStatus')).includes('off your route') && (await text(page, '#courseDir')).includes('of you'),
+    `${await text(page, '#courseStatus')} | ${await text(page, '#courseDir')}`);
+  await fakeFix(page, { latitude: EDDY.latitude, longitude: EDDY.longitude });
 
   // ------------------------------------------------------------------
   // Offline download, then full reload with the internet off
@@ -204,6 +264,8 @@ try {
   const broken = await page.evaluate(() => [...document.querySelectorAll('.leaflet-tile')].filter(i => i.complete && i.naturalWidth === 0).length);
   check('Offline: map pieces load in the south-west of the 2026 map', broken === 0, `${broken} missing`);
   check('Offline: recordings still there', await page.evaluate(async () => (await getTracks()).length === 1));
+  await page.waitForFunction(() => course && course.info, null, { timeout: 8000 }).catch(() => {});
+  check('Offline: your race route still shown', await page.evaluate(() => !!(course && course.info && course.info.id === 'the-challenge' && map.hasLayer(courseLayer))));
   await page.evaluate(() => openMedical());
   await page.waitForFunction(() => document.getElementById('medContent').textContent.includes('DRSABC'), null, { timeout: 8000 }).catch(() => {});
   await page.waitForTimeout(1000);
