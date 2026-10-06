@@ -57,7 +57,7 @@ try {
     const ready0 = await text(page, '#raceCards');
     await shot(page, '8-setup-race');
     check('Race list shows The Challenge', (await text(page, '#raceCards')).includes('The Challenge') && (await text(page, '#raceCards')).includes('28.6 km'), await text(page, '#raceCards'));
-    check('Race list offers all five races', await page.locator('.racecard').count() === 5 && ['The Mutarazi Traverse', 'The Ultra', 'Back2Back', 'The Epic'].every(n => ready0.includes(n)), ready0);
+    check('Race list offers all six races', await page.locator('.racecard').count() === 6 && ['The Mutarazi Traverse', 'The Ultra', 'Back2Back', 'The Epic', 'The GOAT'].every(n => ready0.includes(n)), ready0);
     check('Back2Back card lists both days', ready0.includes('2 days') && ready0.includes('Day 1: The Mutarazi Traverse: 29.6 km') && ready0.includes('Day 2: The Challenge: 28.6 km'));
     check('Cannot continue before choosing a race', await page.locator('#suConfirm').isDisabled());
     await page.click('.racecard[data-id="the-challenge"]');
@@ -137,6 +137,28 @@ try {
     await page.evaluate(() => fitArea(L.latLngBounds(course.pts.map(p => [p[0], p[1]]))));
     await page.waitForTimeout(1200);
     await shot(page, '11-back2back');
+    // The GOAT uses some stretches twice (around km 52 and km 89): the app must report the pass the runner is on,
+    // and remember it after a restart.
+    await page.click('#menuBtn'); await page.waitForTimeout(300);
+    await page.click('#changeRaceBtn');
+    await page.waitForSelector('.racecard');
+    await page.click('.racecard[data-id="the-goat"]');
+    await page.click('#suConfirm');
+    await page.waitForFunction(() => course && course.info && course.info.id === 'the-goat' && !document.querySelector('#raceChip .spin'));
+    check('Switched to The GOAT', (await text(page, '#raceChip')) === 'The GOAT · 114.9 km', await text(page, '#raceChip'));
+    const spot = await page.evaluate(() => { const st = course.stages[0]; const i = st.cum.findIndex(c => c > 52500); return st.pts[i]; });
+    const doneKm = async () => parseFloat((await text(page, '#courseDone')).replace(/[^\d.]/g, ''));
+    await page.evaluate(() => { lastAlong = { s: 0, along: 50000 }; });
+    await fakeFix(page, { latitude: spot[0], longitude: spot[1] });
+    const first = await doneKm();
+    await page.evaluate(() => { lastAlong = { s: 0, along: 87500 }; });
+    await fakeFix(page, { latitude: spot[0], longitude: spot[1] });
+    const second = await doneKm();
+    check('GOAT repeated stretch: first pass reads ~52 km, second pass ~89 km', first > 51 && first < 55 && second > 87 && second < 92, `${first} / ${second}`);
+    await page.reload();
+    await page.waitForFunction(() => course && course.info && course.info.id === 'the-goat');
+    await fakeFix(page, { latitude: spot[0], longitude: spot[1] });
+    check('GOAT: progress remembered after a restart (still the second pass)', (await doneKm()) > 87, await text(page, '#courseDone'));
     // While GPS is still searching, a spinner and a running count show it is working.
     await page.evaluate(() => { gps.fix = null; gps.state = 'searching'; gps.searchSince = Date.now() - 7000; renderGps(); });
     check('Searching for GPS shows a spinner and seconds', await page.locator('#gpsBadges .spin').count() === 1 && (await text(page, '#gpsBadges')).includes('7 s'), await text(page, '#gpsBadges'));

@@ -1,6 +1,6 @@
 // Nyanga Trail Map: offline race map with live GPS, run recording and course.
 // Keep APP_VERSION in step with SHELL in sw.js.
-const APP_VERSION = 'v9 (6 Oct 2026)';
+const APP_VERSION = 'v10 (6 Oct 2026)';
 const TILE_CACHE = 'tiles-v2';
 // Bump when a tile set is added or redrawn, so phones know to download again.
 const TILES_TAG = 'turaco2026';
@@ -720,7 +720,11 @@ async function showRace(id) {
   const res = await fetch(info.file);
   if (!res.ok) throw new Error('route not available (' + res.status + ')');
   course = prepareCourse(await res.json());
-  course.info = info; lastAlong = null;
+  course.info = info;
+  // Progress along the route is remembered on the phone, so that after a
+  // restart the app still knows which pass of a repeated stretch the runner is on.
+  try { const p = JSON.parse(pref('progress')); lastAlong = p && p.race === id && p.version === info.version ? { s: p.s, along: p.along } : null; }
+  catch { lastAlong = null; }
   drawCourse();
   // Routes ship with the app, so an app update can carry a corrected route.
   if (profile.raceVersion && profile.raceVersion !== info.version) toast(`Your ${info.name} route has been updated to the latest version.`, 6000);
@@ -862,7 +866,10 @@ function updateCourse() {
   const st = course.stages[s], n = near[s];
   const tolerance = Math.max(40, f.acc + 15);
   const onCourse = n.d <= tolerance;
-  if (onCourse) lastAlong = { s, along: n.along };
+  if (onCourse) {
+    lastAlong = { s, along: n.along };
+    pref('progress', JSON.stringify({ race: course.info && course.info.id, version: course.info && course.info.version, s, along: Math.round(n.along) }));
+  }
   const prefix = multi ? `${st.short}: ` : '';
   const el = $('courseStatus');
   el.textContent = onCourse ? '✓ On your route' : `⚠ ${Math.round(n.d)} m off your route`;

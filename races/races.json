@@ -30,8 +30,14 @@
     "version": 1,
     "start": "",
     "stages": [
-      { "name": "Day 1: The Mutarazi Traverse", "short": "Day 1" },
-      { "name": "Day 2: The Challenge", "short": "Day 2" }
+      {
+        "name": "Day 1: The Mutarazi Traverse",
+        "short": "Day 1"
+      },
+      {
+        "name": "Day 2: The Challenge",
+        "short": "Day 2"
+      }
     ],
     "notes": "From Back2Back 2026.gpx, which holds two routes: the Mutarazi Traverse loop, then the Challenge. Day order taken from the file."
   },
@@ -42,5 +48,13 @@
     "version": 1,
     "start": "",
     "notes": "From The Epic 2026.gpx. Same start as the Ultra, with a long loop west through the national park before Golden Pools."
+  },
+  {
+    "id": "the-goat",
+    "name": "The GOAT",
+    "file": "the-goat.gpx",
+    "version": 1,
+    "start": "",
+    "notes": "From The GOAT 2026.gpx. Southern start: the Mutarazi Traverse loop, north, the Epic's western loop, an extra eastern loop, then the Challenge route to the finish."
   }
 ]

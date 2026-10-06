@@ -62,5 +62,15 @@
   "climbM": 2970,
   "checkpoints": 16,
   "file": "data/races/the-epic.json"
+ },
+ {
+  "id": "the-goat",
+  "name": "The GOAT",
+  "version": 1,
+  "start": "",
+  "distanceKm": 114.9,
+  "climbM": 6362,
+  "checkpoints": 19,
+  "file": "data/races/the-goat.json"
  }
 ]
