@@ -1,12 +1,31 @@
 // Nyanga Trail Map: offline race map with live GPS, run recording and course.
 // Keep APP_VERSION in step with SHELL in sw.js.
-const APP_VERSION = 'v10 (6 Oct 2026)';
+const APP_VERSION = 'v11 (7 Oct 2026)';
 const TILE_CACHE = 'tiles-v2';
-// Bump when a tile set is added or redrawn, so phones know to download again.
-const TILES_TAG = 'turaco2026';
-const TILE_SETS = ['tiles-turaco26'];
-// Far and Wide "Turaco Trail 2026" race map, bounds read from its GeoTIFF.
-const RACE_BBOX = { west: 32.69659612566003, east: 32.992700072259964, south: -18.523914235060392, north: -18.215629827297686 };
+// The maps the app can show. Each race says which map it uses ("map" in the
+// race list). Bump a map's tag when its pieces change, so phones download again.
+const MAPS = {
+  nyanga: {
+    name: 'Nyanga race map', tag: 'turaco2026', approxMB: 42, sets: ['tiles-turaco26'],
+    // Far and Wide "Turaco Trail 2026" race map, bounds read from its GeoTIFF.
+    bbox: { west: 32.69659612566003, east: 32.992700072259964, south: -18.523914235060392, north: -18.215629827297686 },
+    layers: [{ url: 'tiles-turaco26/{z}/{x}/{y}.webp', minNativeZoom: 11, maxNativeZoom: 16 }],
+    attribution: 'Race map © Far and Wide',
+  },
+  harare: {
+    name: 'Harare practice map', tag: 'harare1', approxMB: 29, sets: ['tiles-harare'],
+    // 30 km around Greendale/Highlands, drawn from OpenStreetMap (tools/render-harare.mjs).
+    bbox: { south: -18.0763, north: -17.5337, west: 30.8219, east: 31.3881 },
+    layers: [
+      { url: 'tiles-harare/{z}/{x}/{y}.webp', minNativeZoom: 11, maxNativeZoom: 15 },
+      // The most detailed zoom only exists within 15 km of the hub.
+      { url: 'tiles-harare/{z}/{x}/{y}.webp', minZoom: 16, minNativeZoom: 16, maxNativeZoom: 16,
+        bbox: { south: -17.9407, north: -17.6693, west: 30.9635, east: 31.2465 } },
+    ],
+    attribution: 'Map data © OpenStreetMap contributors',
+  },
+};
+const ALL_TILE_SETS = Object.values(MAPS).flatMap(m => m.sets);
 const RACE_SOURCE_SHA256 = '2c0463b6ffde958bc8a0b5489d04023cbd628d08b432fdc2262097592d4b9aac';
 
 // Thresholds for GPS warnings and recording. Change here, not in the code below.
@@ -40,9 +59,11 @@ function toast(msg, ms = 4000) {
 // =====================================================================
 // Map
 // =====================================================================
-const raceBounds = L.latLngBounds([RACE_BBOX.south, RACE_BBOX.west], [RACE_BBOX.north, RACE_BBOX.east]);
-// The whole map area is the race map.
-const bounds = raceBounds;
+const toBounds = b => L.latLngBounds([b.south, b.west], [b.north, b.east]);
+let activeMap = MAPS[pref('activeMap')] ? pref('activeMap') : 'nyanga';
+// The area of the map on show (also used for the "outside the map" warning).
+let raceBounds = toBounds(MAPS[activeMap].bbox);
+let bounds = raceBounds;
 const map = L.map('map', {
   preferCanvas: true, zoomControl: false, minZoom: 10, maxZoom: 18,
   maxBounds: bounds.pad(0.3), maxBoundsViscosity: 0.8,
@@ -52,14 +73,29 @@ const fitArea = b => map.fitBounds(b, { paddingTopLeft: [10, 60], paddingBottomR
 fitArea(raceBounds);
 try {
   const v = JSON.parse(pref('view'));
-  if (v) map.setView(v.c, v.z);
+  if (v && raceBounds.pad(0.3).contains(v.c)) map.setView(v.c, v.z);
 } catch {}
 map.on('moveend', () => pref('view', JSON.stringify({ c: map.getCenter(), z: map.getZoom() })));
 
-const raceLayer = L.tileLayer('tiles-turaco26/{z}/{x}/{y}.webp', {
-  minZoom: 10, maxZoom: 18, minNativeZoom: 11, maxNativeZoom: 16, bounds: raceBounds,
-  attribution: 'Race map © Far and Wide',
-}).addTo(map);
+let mapLayers = [], raceLayer = null;
+// Shows one of the maps. Returns true if the map on show changed.
+function setMap(id) {
+  if (!MAPS[id]) id = 'nyanga';
+  if (id === activeMap && mapLayers.length) return false;
+  const m = MAPS[id];
+  activeMap = id; pref('activeMap', id);
+  mapLayers.forEach(l => l.remove());
+  mapLayers = m.layers.map(l => L.tileLayer(l.url, {
+    minZoom: l.minZoom ?? 10, maxZoom: 18, minNativeZoom: l.minNativeZoom, maxNativeZoom: l.maxNativeZoom,
+    bounds: toBounds(l.bbox || m.bbox), attribution: m.attribution,
+  }).addTo(map));
+  raceLayer = mapLayers[0];
+  raceBounds = bounds = toBounds(m.bbox);
+  map.setMaxBounds(bounds.pad(0.3));
+  refreshOfflineStatus();
+  return true;
+}
+setMap(activeMap);
 L.control.scale({ imperial: false, position: 'topleft' }).addTo(map);
 // The position marker sits in its own layer above every label so it is never hidden.
 map.createPane('gps').style.zIndex = 650;
@@ -582,9 +618,12 @@ function fetchWithTimeout(url, ms) {
   return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(t));
 }
 
-async function allTileUrls() {
+// A function declaration, because the map is set up before this point.
+function mapSaved(id = activeMap) { return pref('tilesSaved:' + id) === MAPS[id].tag; }
+
+async function allTileUrls(id = activeMap) {
   const urls = []; let bytes = 0; const sets = {};
-  for (const dir of TILE_SETS) {
+  for (const dir of MAPS[id].sets) {
     const idx = await (await fetchWithTimeout(`${dir}/index.json`, 15000)).json();
     idx.tiles.forEach(t => urls.push(`${dir}/${t}.webp`));
     bytes += idx.bytes; sets[dir] = idx.tiles.length;
@@ -593,15 +632,16 @@ async function allTileUrls() {
 }
 
 // Free space taken by pieces of maps this version no longer uses (once per version).
+const CLEAN_TAG = ALL_TILE_SETS.join('+');
 async function removeOldTiles() {
-  if (pref('tilesCleaned') === TILES_TAG || !('caches' in window)) return;
+  if (pref('tilesCleaned') === CLEAN_TAG || !('caches' in window)) return;
   try {
     const cache = await caches.open(TILE_CACHE);
     for (const req of await cache.keys()) {
       const set = new URL(req.url).pathname.split('/').slice(-4)[0];
-      if (set.startsWith('tiles') && !TILE_SETS.includes(set)) await cache.delete(req);
+      if (set.startsWith('tiles') && !ALL_TILE_SETS.includes(set)) await cache.delete(req);
     }
-    pref('tilesCleaned', TILES_TAG);
+    pref('tilesCleaned', CLEAN_TAG);
   } catch (err) { console.warn('Could not remove old map pieces', err); }
 }
 
@@ -611,14 +651,17 @@ async function storageInfo() {
 }
 
 async function refreshOfflineStatus() {
-  const chip = $('offlineChip'), saved = pref('tilesSaved') === TILES_TAG;
+  const chip = $('offlineChip'), saved = mapSaved(), m = MAPS[activeMap];
   chip.textContent = saved ? 'Saved offline ✓' : 'Map not saved offline';
   chip.className = 'chip ' + (saved ? 'good' : 'warn');
   if (saved) {
-    $('dlText').textContent = 'The map is saved on this phone. It works with no signal.';
+    $('dlText').textContent = `The ${m.name} is saved on this phone. It works with no signal.`;
     $('dlBtn').textContent = 'Check / repair offline map';
-  } else if (pref('tilesSaved')) {
-    $('dlText').textContent = 'A newer map is available. Download again on wifi to update it.';
+  } else {
+    $('dlText').textContent = pref('tilesSaved:' + activeMap)
+      ? `A newer ${m.name} is available. Download again on wifi to update it.`
+      : `Download the ${m.name} (about ${m.approxMB} MB) once on wifi, then it works with no signal.`;
+    $('dlBtn').textContent = 'Download map for offline';
   }
   $('dlDelete').hidden = !saved;
   const s = await storageInfo();
@@ -627,12 +670,12 @@ async function refreshOfflineStatus() {
 
 // Downloads every map piece, showing progress in the given button, bar and text.
 // Returns true when the whole map is saved on the phone.
-async function downloadMap(btn, bar, text) {
+async function downloadMap(btn, bar, text, id = activeMap) {
   btn.disabled = true; bar.style.display = 'block';
   try {
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
     text.innerHTML = `${SPIN}Starting download…`;
-    const { urls, bytes } = await allTileUrls();
+    const { urls, bytes } = await allTileUrls(id);
     const s = await storageInfo();
     if (s && s.quota && s.quota - s.usage < bytes * 1.5 &&
         !confirm(`This phone may not have enough free space for the map (${(bytes / 1e6).toFixed(0)} MB). Try anyway?`)) {
@@ -666,14 +709,14 @@ async function downloadMap(btn, bar, text) {
     if (failed || missing) {
       text.textContent = `${Math.max(failed, missing)} pieces are missing. Check your connection and tap the button again; it carries on where it stopped.`;
     } else {
-      // Free the space used by pieces of older maps that are no longer used.
+      // Free the space used by pieces of maps the app no longer uses. Pieces
+      // of the other current maps (e.g. Harare and Nyanga) are kept.
       // A piece is identified by "<set>/<z>/<x>/<y>.webp", the last 4 parts of its address.
-      const wanted = new Set(urls.map(u => u.split('/').slice(-4).join('/')));
       for (const req of await cache.keys()) {
         const key = new URL(req.url).pathname.split('/').slice(-4).join('/');
-        if (key.startsWith('tiles') && !wanted.has(key)) await cache.delete(req);
+        if (key.startsWith('tiles') && !ALL_TILE_SETS.includes(key.split('/')[0])) await cache.delete(req);
       }
-      pref('tilesSaved', TILES_TAG);
+      pref('tilesSaved:' + id, MAPS[id].tag);
       text.textContent = 'Done. The map is saved on this phone.';
     }
   } catch (err) {
@@ -681,14 +724,14 @@ async function downloadMap(btn, bar, text) {
   }
   btn.disabled = false;
   refreshOfflineStatus();
-  return pref('tilesSaved') === TILES_TAG;
+  return mapSaved(id);
 }
 $('dlBtn').onclick = () => downloadMap($('dlBtn'), $('dlProgress'), $('dlText'));
 
 $('dlDelete').onclick = async () => {
-  if (!confirm('Delete the offline map from this phone? You will need internet to download it again. Recordings are kept.')) return;
+  if (!confirm('Delete the offline maps from this phone? You will need internet to download them again. Recordings are kept.')) return;
   await caches.delete(TILE_CACHE);
-  try { localStorage.removeItem('tilesSaved'); } catch {}
+  try { ['tilesSaved', ...Object.keys(MAPS).map(k => 'tilesSaved:' + k)].forEach(k => localStorage.removeItem(k)); } catch {}
   $('dlBtn').textContent = 'Download map for offline';
   $('dlText').textContent = 'Offline map deleted. Download it again on wifi before the race.';
   refreshOfflineStatus();
@@ -717,6 +760,7 @@ async function showRace(id) {
   $('raceChip').innerHTML = `${SPIN}Loading your race…`;
   const info = (await loadRaceList()).find(r => r.id === id);
   if (!info) throw new Error('Your race is no longer in the app. Please choose your race again.');
+  const mapChanged = setMap(info.map || 'nyanga');
   const res = await fetch(info.file);
   if (!res.ok) throw new Error('route not available (' + res.status + ')');
   course = prepareCourse(await res.json());
@@ -730,6 +774,7 @@ async function showRace(id) {
   if (profile.raceVersion && profile.raceVersion !== info.version) toast(`Your ${info.name} route has been updated to the latest version.`, 6000);
   profile.raceVersion = info.version; saveProfile();
   renderRaceInfo();
+  if (mapChanged) fitArea(L.latLngBounds(course.pts.map(p => [p[0], p[1]])));
 }
 
 function renderRaceInfo() {
@@ -924,7 +969,7 @@ const setup = {
       Close Safari and open the app from the new icon, then set up there. Anything set up here in Safari does not carry over to the icon.</div>` : '';
     return `<h2>Welcome to the SkyRun 2026 trail map</h2>
       <p>This app shows your position and your race route on the official race map, with no phone signal needed.</p>
-      <p>Setup takes about 3 minutes. <b>Use wifi</b>: the map download is about 42 MB.</p>${iphoneWarning}
+      <p>Setup takes about 3 minutes. <b>Use wifi</b>: the map download is about 30 to 45 MB.</p>${iphoneWarning}
       <button class="btn" data-go="details">${isIOS && !isStandalone ? 'Set up in Safari anyway' : 'Start'}</button>`;
   },
   wire_welcome() { $('setupBody').querySelector('[data-go]').onclick = () => this.go('details'); },
@@ -963,7 +1008,7 @@ const setup = {
     catch (err) { $('raceCards').textContent = 'Could not load the races: ' + (err.message || err) + '. Connect to the internet and try again.'; return; }
     const days = r => (r.stages ? `<span class="days">${r.stages.map(s => `${escapeHtml(s.name)}: ${s.distanceKm} km`).join('<br>')}</span>` : '');
     const card = r => `<button class="racecard${this.picked === r.id ? ' picked' : ''}" data-id="${escapeHtml(r.id)}">
-      <b>${escapeHtml(r.name)}</b><span>${r.stages ? r.stages.length + ' days · ' : ''}${r.distanceKm} km · ${r.climbM} m climb${r.start ? ' · start ' + escapeHtml(r.start) : ''}${r.checkpoints ? ` · ${r.checkpoints} checkpoints` : ''}</span>${days(r)}</button>`;
+      ${r.practice ? '<span class="practice">Practice run · Harare</span>' : ''}<b>${escapeHtml(r.name)}</b><span>${r.stages ? r.stages.length + ' days · ' : ''}${r.distanceKm} km · ${r.climbM} m climb${r.start ? ' · start ' + escapeHtml(r.start) : ''}${r.checkpoints ? ` · ${r.checkpoints} checkpoints` : ''}</span>${days(r)}</button>`;
     $('raceCards').innerHTML = list.map(card).join('');
     const confirmBtn = $('suConfirm');
     const update = () => {
@@ -977,28 +1022,33 @@ const setup = {
     confirmBtn.onclick = () => {
       if (this.changing) {
         const r = list.find(x => x.id === this.picked);
-        if (confirm(`Change your race to ${r.name} (${r.distanceKm} km)? Only that route will be shown.`)) this.finish();
+        if (!confirm(`Change your race to ${r.name} (${r.distanceKm} km)? Only that route will be shown.`)) return;
+        if (mapSaved(this.mapId())) this.finish(); else this.go('map');
       } else this.go('map');
     };
   },
 
+  // The map the chosen race uses.
+  mapId() { const r = races.find(x => x.id === this.picked); return (r && r.map) || 'nyanga'; },
+
   map() {
-    const saved = pref('tilesSaved') === TILES_TAG;
-    return `<h2>Save the map on your phone</h2>
-      <p>The map must be saved on your phone so it works on the mountain with no signal.</p>
-      <div class="small" id="suDlText">${saved ? 'The map is already saved on this phone ✓' : 'About 42 MB. Use wifi.'}</div>
+    const id = this.mapId(), m = MAPS[id], saved = mapSaved(id);
+    return `<h2>Save the ${m.name} on your phone</h2>
+      <p>The map must be saved on your phone so it works with no signal.</p>
+      <div class="small" id="suDlText">${saved ? 'This map is already saved on this phone ✓' : `About ${m.approxMB} MB. Use wifi.`}</div>
       <div class="progress" id="suDlBar"><div></div></div>
       ${saved ? '' : '<button class="btn" id="suDl">Download the map</button>'}
       <button class="btn${saved ? '' : ' secondary'}" id="suNext"${saved ? '' : ' hidden'}>Next</button>
       ${saved ? '' : '<button class="linkbtn" id="suSkip">Skip for now (not recommended)</button>'}`;
   },
   wire_map() {
-    $('suNext').onclick = () => this.go('location');
+    const next = () => (this.changing ? this.finish() : this.go('location'));
+    $('suNext').onclick = next;
     if ($('suSkip')) $('suSkip').onclick = () => {
-      if (confirm('Without the saved map, the app will not work on the mountain. You can download it later from the menu. Skip for now?')) this.go('location');
+      if (confirm('Without the saved map, the app will not work with no signal. You can download it later from the menu. Skip for now?')) next();
     };
     if ($('suDl')) $('suDl').onclick = async () => {
-      const ok = await downloadMap($('suDl'), $('suDlBar'), $('suDlText'));
+      const ok = await downloadMap($('suDl'), $('suDlBar'), $('suDlText'), this.mapId());
       if (ok) { $('suDl').hidden = true; $('suSkip').hidden = true; const n = $('suNext'); n.hidden = false; n.classList.remove('secondary'); }
     };
   },
@@ -1034,7 +1084,7 @@ const setup = {
     return `<h2>Ready to race</h2>
       ${row(!!profile.name, `Name: ${escapeHtml(profile.name || 'not given')}${profile.bib ? ', bib ' + escapeHtml(profile.bib) : ''}`)}
       ${row(!!r, r ? `Race: ${escapeHtml(r.name)}, ${r.distanceKm} km` : 'No race chosen')}
-      ${row(pref('tilesSaved') === TILES_TAG, pref('tilesSaved') === TILES_TAG ? 'Map saved for offline use' : 'Map NOT saved: download it from the menu before the race')}
+      ${row(mapSaved(this.mapId()), mapSaved(this.mapId()) ? 'Map saved for offline use' : 'Map NOT saved: download it from the menu before you go')}
       ${row(!!gps.fix, gps.fix ? 'Location working' : 'Location not found yet: it will keep looking')}
       <p class="small">Keep the app open on screen while you run. It is a navigation aid: follow the course markings and marshals.</p>
       <button class="btn" id="suDone">Open my map</button>
@@ -1082,7 +1132,7 @@ function renderDebug() {
     `inside   map ${f ? raceBounds.contains([f.lat, f.lon]) : '-'}`,
     `gps      ${gps.state} · perm ${gps.perm} · follow ${gps.follow}`,
     `rec      ${recorder.status}${recorder.track ? ` #${recorder.track.id} ${recorder.track.points} pts` : ''}`,
-    `app      ${APP_VERSION} · tiles ${TILES_TAG} · saved ${pref('tilesSaved') === TILES_TAG}`,
+    `app      ${APP_VERSION} · map ${activeMap} (${MAPS[activeMap].tag}) · saved ${mapSaved()}`,
     `pieces   ${tileCounts || '…'}`,
     `race src sha256 ${RACE_SOURCE_SHA256.slice(0, 16)}…`,
   ];
@@ -1149,7 +1199,8 @@ if (profile.setupDone && profile.raceId) {
 } else {
   setup.open('welcome');
 }
-if (pref('tilesSaved') === 'contours2+turaco2026') pref('tilesSaved', TILES_TAG);
+// Earlier versions kept one saved flag for the Nyanga map only.
+if (['turaco2026', 'contours2+turaco2026'].includes(pref('tilesSaved'))) { pref('tilesSaved:nyanga', MAPS.nyanga.tag); try { localStorage.removeItem('tilesSaved'); } catch {} }
 removeOldTiles();
 refreshOfflineStatus();
 if (pref('compass') === '1') setCompass(true, false);

@@ -20,7 +20,7 @@ mkdirSync('data/races', { recursive: true });
 
 // Elevation lookup (bilinear) from the Copernicus tiles covering Nyanga.
 const dem = [];
-for (const f of ['tools/data/S19_00_E032_00.tif', 'tools/data/S18_00_E032_00.tif']) {
+for (const f of ['tools/data/S19_00_E032_00.tif', 'tools/data/S18_00_E032_00.tif', 'tools/data/S18_00_E031_00.tif']) {
   if (!existsSync(f)) continue;
   const img = await (await fromFile(f)).getImage();
   const [w, s, e, n] = img.getBoundingBox();
@@ -107,6 +107,7 @@ for (const race of races) {
   writeFileSync(`data/races/${race.id}.json`, JSON.stringify(out));
   const distanceKm = +stages.reduce((s, st) => s + st.distanceKm, 0).toFixed(1), climbM = stages.reduce((s, st) => s + st.climbM, 0);
   index.push({ id: race.id, name: race.name, version: race.version, start: race.start || '', distanceKm, climbM,
+    map: race.map || 'nyanga', practice: race.practice || undefined,
     checkpoints: wpts.length, file: `data/races/${race.id}.json`,
     stages: stages.length > 1 ? stages.map(({ name, short, distanceKm, climbM }) => ({ name, short, distanceKm, climbM })) : undefined });
   console.log(`${race.name}: ${distanceKm} km, ${climbM} m climb, ${stages.length} stage(s) ` +

@@ -28,6 +28,14 @@ async function newPage({ fresh = false, ...opts } = {}) {
   return { ctx, page, errors };
 }
 const text = (page, sel) => page.locator(sel).innerText();
+// Picks a race in the change-race list. If that race's map is not saved on
+// the phone, the app asks to download it; tests that don't need it skip.
+const pickRace = async (page, id) => {
+  await page.click(`.racecard[data-id="${id}"]`);
+  await page.click('#suConfirm');
+  await page.waitForTimeout(250);
+  if (await page.locator('#suSkip').isVisible().catch(() => false)) await page.click('#suSkip');
+};
 const fakeFix = (page, f) => page.evaluate(f => onFix({ coords: { accuracy: 6, altitude: 1200, altitudeAccuracy: 8, heading: null, speed: null, ...f }, timestamp: f.t || Date.now() }), f);
 
 try {
@@ -57,7 +65,8 @@ try {
     const ready0 = await text(page, '#raceCards');
     await shot(page, '8-setup-race');
     check('Race list shows The Challenge', (await text(page, '#raceCards')).includes('The Challenge') && (await text(page, '#raceCards')).includes('28.6 km'), await text(page, '#raceCards'));
-    check('Race list offers all six races', await page.locator('.racecard').count() === 6 && ['The Mutarazi Traverse', 'The Ultra', 'Back2Back', 'The Epic', 'The GOAT'].every(n => ready0.includes(n)), ready0);
+    check('Race list offers the six races plus Harare Prep', await page.locator('.racecard').count() === 7 && ['The Mutarazi Traverse', 'The Ultra', 'Back2Back', 'The Epic', 'The GOAT', 'Harare Prep'].every(n => ready0.includes(n)), ready0);
+    check('Harare Prep is marked as a practice run', (await text(page, '.racecard[data-id="harare-prep"]')).includes('Practice run · Harare'));
     check('Back2Back card lists both days', ready0.includes('2 days') && ready0.includes('Day 1: The Mutarazi Traverse: 29.6 km') && ready0.includes('Day 2: The Challenge: 28.6 km'));
     check('Cannot continue before choosing a race', await page.locator('#suConfirm').isDisabled());
     await page.click('.racecard[data-id="the-challenge"]');
@@ -93,16 +102,14 @@ try {
     await page.click('#changeRaceBtn');
     await page.waitForSelector('.racecard');
     check('Change race opens the race list', (await text(page, '#setupBody')).includes('Choose your race'));
-    await page.click('.racecard[data-id="the-challenge"]');
-    await page.click('#suConfirm');
+    await pickRace(page, 'the-challenge');
     await page.waitForFunction(() => !document.getElementById('setup').classList.contains('open') && !document.querySelector('#raceChip .spin'));
     check('Change race confirms and returns to the map', (await text(page, '#raceChip')).startsWith('The Challenge'));
     // Switch to the Ultra: its checkpoints show, and the next one is named.
     await page.click('#menuBtn'); await page.waitForTimeout(300);
     await page.click('#changeRaceBtn');
     await page.waitForSelector('.racecard');
-    await page.click('.racecard[data-id="the-ultra"]');
-    await page.click('#suConfirm');
+    await pickRace(page, 'the-ultra');
     await page.waitForFunction(() => course && course.info && course.info.id === 'the-ultra');
     check('Switched to The Ultra', (await text(page, '#raceChip')) === 'The Ultra · 52.5 km', await text(page, '#raceChip'));
     check('Ultra checkpoints on the map (water and stations)', await page.evaluate(() =>
@@ -117,8 +124,7 @@ try {
     await page.click('#menuBtn'); await page.waitForTimeout(300);
     await page.click('#changeRaceBtn');
     await page.waitForSelector('.racecard');
-    await page.click('.racecard[data-id="back2back"]');
-    await page.click('#suConfirm');
+    await pickRace(page, 'back2back');
     await page.waitForFunction(() => course && course.info && course.info.id === 'back2back');
     const b2b = await page.evaluate(() => ({
       stages: course.stages.length,
@@ -142,8 +148,7 @@ try {
     await page.click('#menuBtn'); await page.waitForTimeout(300);
     await page.click('#changeRaceBtn');
     await page.waitForSelector('.racecard');
-    await page.click('.racecard[data-id="the-goat"]');
-    await page.click('#suConfirm');
+    await pickRace(page, 'the-goat');
     await page.waitForFunction(() => course && course.info && course.info.id === 'the-goat' && !document.querySelector('#raceChip .spin'));
     check('Switched to The GOAT', (await text(page, '#raceChip')) === 'The GOAT · 114.9 km', await text(page, '#raceChip'));
     const spot = await page.evaluate(() => { const st = course.stages[0]; const i = st.cum.findIndex(c => c > 52500); return st.pts[i]; });
@@ -344,6 +349,47 @@ try {
   await page.evaluate(() => { map.setView([-18.395, 32.835], 15); });
   await page.waitForTimeout(800);
   await shot(page, '6-offline');
+  await ctx.setOffline(false);
+
+  // ------------------------------------------------------------------
+  // Harare Prep: its own map, downloaded alongside the Nyanga map (both kept)
+  await page.evaluate(() => openSheet()); await page.waitForTimeout(300);
+  await page.click('#changeRaceBtn');
+  await page.waitForSelector('.racecard');
+  await page.click('.racecard[data-id="harare-prep"]');
+  await page.click('#suConfirm');
+  await page.waitForSelector('#suDl');
+  check('Changing to Harare Prep asks to save the Harare map', (await text(page, '#setupBody')).includes('Harare practice map'));
+  await page.click('#suDl');
+  await page.waitForFunction(() => document.getElementById('suNext') && !document.getElementById('suNext').hidden, null, { timeout: 180000 });
+  await page.click('#suNext');
+  await page.waitForFunction(() => course && course.info && course.info.id === 'harare-prep' && !document.querySelector('#raceChip .spin'));
+  check('Harare Prep shown on the Harare map', (await text(page, '#raceChip')) === 'Harare Prep · 10.8 km' &&
+    await page.evaluate(() => activeMap === 'harare' && raceLayer._url.includes('tiles-harare')), await text(page, '#raceChip'));
+  const both = await page.evaluate(async () => {
+    const c = await caches.open(TILE_CACHE), keys = (await c.keys()).map(r => r.url);
+    return { nyanga: mapSaved('nyanga'), harare: mapSaved('harare'),
+      nyangaPieces: keys.filter(k => k.includes('/tiles-turaco26/')).length, hararePieces: keys.filter(k => k.includes('/tiles-harare/')).length };
+  });
+  check('Both maps saved: downloading Harare kept every Nyanga piece', both.nyanga && both.harare && both.nyangaPieces === 4481 && both.hararePieces === 6623, JSON.stringify(both));
+  const hp = await page.evaluate(() => course.pts[3]);
+  await fakeFix(page, { latitude: hp[0], longitude: hp[1] });
+  check('Harare Prep: on your route, next practice checkpoint named', (await text(page, '#courseStatus')).includes('On your route') && (await text(page, '#courseNext')).includes('Practice water 1'),
+    `${await text(page, '#courseStatus')} | ${await text(page, '#courseNext')}`);
+  await ctx.setOffline(true);
+  await page.reload();
+  await page.waitForFunction(() => course && course.info && course.info.id === 'harare-prep', null, { timeout: 10000 }).catch(() => {});
+  await page.evaluate(() => { map.setView([-17.805, 31.105], 16); });
+  await page.waitForTimeout(1500);
+  const ht = await page.evaluate(() => [...document.querySelectorAll('.leaflet-tile')].map(i => ({ ok: i.complete && i.naturalWidth > 0, h: i.src.includes('tiles-harare') })));
+  check('Offline: Harare map loads (most detailed zoom)', ht.filter(x => x.h && x.ok).length > 4 && !ht.some(x => x.h && !x.ok), `${ht.filter(x => x.h && x.ok).length} pieces`);
+  await page.evaluate(() => { map.setView([-17.62, 30.90], 15); });
+  await page.waitForTimeout(1500);
+  const outer = await page.evaluate(() => [...document.querySelectorAll('.leaflet-tile')].filter(i => i.complete && i.naturalWidth === 0).length);
+  check('Offline: outer Harare (beyond 15 km) loads too', outer === 0, `${outer} missing`);
+  await page.evaluate(() => fitArea(L.latLngBounds(course.pts.map(p => [p[0], p[1]]))));
+  await page.waitForTimeout(1500);
+  await shot(page, '12-harare-prep');
   await ctx.setOffline(false);
 
   await page.evaluate(() => openSheet()); await page.waitForTimeout(300);

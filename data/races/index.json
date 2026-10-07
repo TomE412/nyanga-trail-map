@@ -6,6 +6,7 @@
   "start": "",
   "distanceKm": 28.6,
   "climbM": 1383,
+  "map": "nyanga",
   "checkpoints": 9,
   "file": "data/races/the-challenge.json"
  },
@@ -16,6 +17,7 @@
   "start": "",
   "distanceKm": 29.6,
   "climbM": 2029,
+  "map": "nyanga",
   "checkpoints": 0,
   "file": "data/races/mutarazi-traverse.json"
  },
@@ -26,6 +28,7 @@
   "start": "",
   "distanceKm": 52.5,
   "climbM": 3052,
+  "map": "nyanga",
   "checkpoints": 21,
   "file": "data/races/the-ultra.json"
  },
@@ -36,6 +39,7 @@
   "start": "",
   "distanceKm": 58.2,
   "climbM": 3414,
+  "map": "nyanga",
   "checkpoints": 9,
   "file": "data/races/back2back.json",
   "stages": [
@@ -60,6 +64,7 @@
   "start": "",
   "distanceKm": 64.5,
   "climbM": 2970,
+  "map": "nyanga",
   "checkpoints": 16,
   "file": "data/races/the-epic.json"
  },
@@ -70,7 +75,20 @@
   "start": "",
   "distanceKm": 114.9,
   "climbM": 6362,
+  "map": "nyanga",
   "checkpoints": 19,
   "file": "data/races/the-goat.json"
+ },
+ {
+  "id": "harare-prep",
+  "name": "Harare Prep",
+  "version": 1,
+  "start": "",
+  "distanceKm": 10.8,
+  "climbM": 127,
+  "map": "harare",
+  "practice": true,
+  "checkpoints": 3,
+  "file": "data/races/harare-prep.json"
  }
 ]
