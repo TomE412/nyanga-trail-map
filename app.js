@@ -1,6 +1,6 @@
 // Nyanga Trail Map: offline race map with live GPS, run recording and course.
 // Keep APP_VERSION in step with SHELL in sw.js.
-const APP_VERSION = 'v11 (7 Oct 2026)';
+const APP_VERSION = 'v11 (8 Oct 2026)';
 const TILE_CACHE = 'tiles-v2';
 // The maps the app can show. Each race says which map it uses ("map" in the
 // race list). Bump a map's tag when its pieces change, so phones download again.
@@ -917,7 +917,9 @@ function updateCourse() {
   }
   const prefix = multi ? `${st.short}: ` : '';
   const el = $('courseStatus');
-  el.textContent = onCourse ? '✓ On your route' : `⚠ ${Math.round(n.d)} m off your route`;
+  // Metres when close; kilometres once more than 1 km away.
+  const off = n.d < 1000 ? `${Math.round(n.d)} m` : `${(n.d / 1000).toFixed(n.d < 10000 ? 1 : 0)} km`;
+  el.textContent = onCourse ? '✓ On your route' : `⚠ ${off} off your route`;
   el.className = 'course-status ' + (onCourse ? 'ok' : 'off');
   $('courseDir').textContent = onCourse ? '' : `Your route is ${compassPoint(n.bearing)} of you`;
   $('courseDone').textContent = `${prefix}${km(n.along)} done`;

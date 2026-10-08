@@ -299,6 +299,8 @@ try {
   await fakeFix(page, { latitude: onRoute[0] + 0.01, longitude: onRoute[1] });
   check('Route: off-route warning with direction', (await text(page, '#courseStatus')).includes('off your route') && (await text(page, '#courseDir')).includes('of you'),
     `${await text(page, '#courseStatus')} | ${await text(page, '#courseDir')}`);
+  await fakeFix(page, { latitude: onRoute[0] + 0.2, longitude: onRoute[1] });
+  check('Far from the route the distance is in km', /⚠ \d+ km off your route/.test(await text(page, '#courseStatus')), await text(page, '#courseStatus'));
   await fakeFix(page, { latitude: EDDY.latitude, longitude: EDDY.longitude });
 
   // ------------------------------------------------------------------
