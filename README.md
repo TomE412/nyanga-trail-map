@@ -1,4 +1,4 @@
-# Nyanga Trail Map
+# SkyRunZim
 
 An offline race map for trail running in Nyanga, Zimbabwe, built around the
 Far and Wide "Turaco Trail 2026" map.

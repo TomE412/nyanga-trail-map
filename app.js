@@ -1,6 +1,6 @@
-// Nyanga Trail Map: offline race map with live GPS, run recording and course.
+// SkyRunZim: offline race map with live GPS, run recording and course.
 // Keep APP_VERSION in step with SHELL in sw.js.
-const APP_VERSION = 'v11 (8 Oct 2026)';
+const APP_VERSION = 'v12 (20 Oct 2026)';
 const TILE_CACHE = 'tiles-v2';
 // The maps the app can show. Each race says which map it uses ("map" in the
 // race list). Bump a map's tag when its pieces change, so phones download again.
@@ -518,7 +518,7 @@ function buildGpx(t, pts) {
     (p.altitude != null ? `<ele>${p.altitude.toFixed(1)}</ele>` : '') + `<time>${p.recordedAt}</time>` +
     `<extensions>${ext(p)}</extensions></trkpt>`;
   return `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="Nyanga Trail Map ${xmlEsc(APP_VERSION)}" xmlns="http://www.topografix.com/GPX/1/1" xmlns:tm="https://nyanga-trail-map/gpx-ext/1">
+<gpx version="1.1" creator="SkyRunZim ${xmlEsc(APP_VERSION)}" xmlns="http://www.topografix.com/GPX/1/1" xmlns:tm="https://nyanga-trail-map/gpx-ext/1">
 <metadata><name>${xmlEsc(t.name)}</name><time>${t.startedAt}</time></metadata>
 <trk><name>${xmlEsc(t.name)}</name>
 ${segs.filter(Boolean).map(s => `<trkseg>\n${s.map(trkpt).join('\n')}\n</trkseg>`).join('\n')}
@@ -969,7 +969,7 @@ const setup = {
     const iphoneWarning = isIOS && !isStandalone ? `
       <div class="note warnbox"><b>iPhone: add to Home Screen first.</b> Tap the Share button, then <b>Add to Home Screen</b>.
       Close Safari and open the app from the new icon, then set up there. Anything set up here in Safari does not carry over to the icon.</div>` : '';
-    return `<h2>Welcome to the SkyRun 2026 trail map</h2>
+    return `<h2>Welcome to SkyRunZim</h2>
       <p>This app shows your position and your race route on the official race map, with no phone signal needed.</p>
       <p>Setup takes about 3 minutes. <b>Use wifi</b>: the map download is about 30 to 45 MB.</p>${iphoneWarning}
       <button class="btn" data-go="details">${isIOS && !isStandalone ? 'Set up in Safari anyway' : 'Start'}</button>`;
